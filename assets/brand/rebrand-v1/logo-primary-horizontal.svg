@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="620" viewBox="0 0 1800 620" role="img" aria-labelledby="title desc">
+  <title id="title">Magellan Primary Horizontal Logo</title>
+  <desc id="desc">A simplified compass mark paired with a lowercase Magellan wordmark.</desc>
+  <defs>
+    <style>
+      .navy { fill: #040a18; }
+      .stone { fill: none; stroke: #c4c3b0; }
+      .blue { stroke: #09476f; }
+      .word { font-family: Avenir, Montserrat, Helvetica, Arial, sans-serif; font-size: 220px; font-weight: 700; letter-spacing: -2px; }
+    </style>
+  </defs>
+  <rect width="1800" height="620" fill="#f5f5e9"/>
+  <g transform="translate(140 118)">
+    <circle cx="178" cy="178" r="118" class="stone" stroke-width="8"/>
+    <circle cx="178" cy="178" r="22" fill="#f5f5e9" stroke="#040a18" stroke-width="12"/>
+    <path class="navy" d="M178 0 L210 146 L356 178 L210 210 L178 356 L146 210 L0 178 L146 146 Z"/>
+    <path fill="#c4c3b0" d="M178 54 L195 156 L302 178 L195 200 L178 302 L161 200 L54 178 L161 156 Z"/>
+    <circle cx="178" cy="178" r="16" fill="#040a18"/>
+  </g>
+  <g transform="translate(510 0)">
+    <text class="word navy" x="0" y="350">magellan</text>
+    <line class="blue" x1="615" y1="404" x2="875" y2="404" stroke-width="13" stroke-linecap="round"/>
+  </g>
+</svg>
