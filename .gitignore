@@ -4,3 +4,9 @@
 node_modules/
 scripts/node_modules/
 deploy-*.zip
+
+# Local Codex/GitHub auth helpers
+.codex-gh-config/
+.codex-ssh/
+github-upload-ready/
+outputs/
