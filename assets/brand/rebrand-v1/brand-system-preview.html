@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Magellan Rebrand V1</title>
+    <style>
+      :root {
+        --navy: #040a18;
+        --ivory: #f5f5e9;
+        --stone: #c4c3b0;
+        --ocean: #09476f;
+        --sky: #b1d4e0;
+        --terra: #7a403e;
+        --ink: #231f20;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Avenir, Montserrat, Helvetica, Arial, sans-serif;
+        background: var(--ivory);
+        color: var(--navy);
+      }
+      main {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 54px 0 80px;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(38px, 6vw, 78px);
+        line-height: .96;
+        letter-spacing: 0;
+      }
+      p {
+        max-width: 760px;
+        margin: 0 0 30px;
+        color: #53524a;
+        font-size: 19px;
+        line-height: 1.55;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+        gap: 22px;
+      }
+      figure {
+        margin: 0;
+        background: white;
+        border: 1px solid #dedbc9;
+      }
+      figure img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      figcaption {
+        padding: 14px 16px 16px;
+        font-weight: 700;
+      }
+      .wide {
+        grid-column: 1 / -1;
+      }
+      a { color: var(--ocean); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Magellan Rebrand V1</h1>
+      <p>A soft rebrand direction for Magellan Travel Gifts: cleaner, more shoppable, still rooted in compass/navigation imagery. Open each SVG directly for full-size inspection.</p>
+      <section class="grid">
+        <figure class="wide">
+          <img src="palette-board.svg" alt="Magellan color palette board">
+          <figcaption>Palette Board</figcaption>
+        </figure>
+        <figure class="wide">
+          <img src="logo-primary-horizontal.svg" alt="Magellan primary horizontal logo">
+          <figcaption>Primary Horizontal Logo</figcaption>
+        </figure>
+        <figure>
+          <img src="logo-wordmark.svg" alt="Magellan wordmark logo">
+          <figcaption>Wordmark</figcaption>
+        </figure>
+        <figure>
+          <img src="logo-compass-icon.svg" alt="Magellan compass icon">
+          <figcaption>Compass Icon</figcaption>
+        </figure>
+        <figure>
+          <img src="logo-square-social.svg" alt="Magellan square social logo">
+          <figcaption>Square Social</figcaption>
+        </figure>
+      </section>
+    </main>
+  </body>
+</html>
