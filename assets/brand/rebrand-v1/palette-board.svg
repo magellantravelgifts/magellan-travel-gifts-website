@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Magellan Travel Gifts Soft Rebrand Palette</title>
+  <desc id="desc">A warm ivory brand palette board with navy, stone, ocean blue, sky blue, terracotta, and charcoal swatches.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f5f5e9; }
+      .ink { fill: #040a18; }
+      .muted { fill: #53524a; }
+      .label { font-family: Avenir, Montserrat, Helvetica, Arial, sans-serif; font-size: 34px; font-weight: 700; letter-spacing: 0; }
+      .small { font-family: Avenir, Montserrat, Helvetica, Arial, sans-serif; font-size: 22px; font-weight: 500; letter-spacing: 0; }
+      .code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 20px; font-weight: 600; letter-spacing: 0; }
+      .line { stroke: #09476f; stroke-width: 9; stroke-linecap: round; }
+    </style>
+  </defs>
+  <rect class="bg" width="1600" height="1000"/>
+  <g transform="translate(115 110)">
+    <text class="label ink" x="0" y="0">Magellan Travel Gifts</text>
+    <text class="small muted" x="0" y="48">Soft rebrand palette: modern travel gift shop with a vintage map soul.</text>
+    <line class="line" x1="0" y1="88" x2="190" y2="88"/>
+  </g>
+
+  <g transform="translate(115 270)">
+    <rect x="0" y="0" width="270" height="330" rx="0" fill="#040a18"/>
+    <text class="small" x="28" y="235" fill="#f5f5e9">Midnight Navy</text>
+    <text class="code" x="28" y="278" fill="#c4c3b0">#040A18</text>
+  </g>
+  <g transform="translate(415 270)">
+    <rect x="0" y="0" width="270" height="330" rx="0" fill="#f5f5e9" stroke="#d9d6c5" stroke-width="2"/>
+    <text class="small ink" x="28" y="235">Warm Ivory</text>
+    <text class="code" x="28" y="278" fill="#09476f">#F5F5E9</text>
+  </g>
+  <g transform="translate(715 270)">
+    <rect x="0" y="0" width="270" height="330" rx="0" fill="#c4c3b0"/>
+    <text class="small ink" x="28" y="235">Compass Stone</text>
+    <text class="code" x="28" y="278" fill="#040a18">#C4C3B0</text>
+  </g>
+  <g transform="translate(1015 270)">
+    <rect x="0" y="0" width="270" height="330" rx="0" fill="#09476f"/>
+    <text class="small" x="28" y="235" fill="#f5f5e9">Ocean Blue</text>
+    <text class="code" x="28" y="278" fill="#b1d4e0">#09476F</text>
+  </g>
+
+  <g transform="translate(115 650)">
+    <rect x="0" y="0" width="270" height="210" rx="0" fill="#b1d4e0"/>
+    <text class="small ink" x="28" y="125">Soft Sky</text>
+    <text class="code" x="28" y="168" fill="#040a18">#B1D4E0</text>
+  </g>
+  <g transform="translate(415 650)">
+    <rect x="0" y="0" width="270" height="210" rx="0" fill="#7a403e"/>
+    <text class="small" x="28" y="125" fill="#f5f5e9">Map Terracotta</text>
+    <text class="code" x="28" y="168" fill="#f5f5e9">#7A403E</text>
+  </g>
+  <g transform="translate(715 650)">
+    <rect x="0" y="0" width="270" height="210" rx="0" fill="#231f20"/>
+    <text class="small" x="28" y="125" fill="#f5f5e9">Charcoal Ink</text>
+    <text class="code" x="28" y="168" fill="#c4c3b0">#231F20</text>
+  </g>
+  <g transform="translate(1075 680)">
+    <text class="small ink" x="0" y="0">Recommended use</text>
+    <text class="small muted" x="0" y="48">Ivory and navy as the base.</text>
+    <text class="small muted" x="0" y="92">Ocean blue for calls to action.</text>
+    <text class="small muted" x="0" y="136">Terracotta only as a warm accent.</text>
+  </g>
+</svg>
