@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="420" viewBox="0 0 1400 420" role="img" aria-labelledby="title desc">
+  <title id="title">Magellan Wordmark</title>
+  <desc id="desc">A clean lowercase Magellan wordmark with blue underline accent.</desc>
+  <defs>
+    <style>
+      .word { font-family: Avenir, Montserrat, Helvetica, Arial, sans-serif; font-size: 230px; font-weight: 700; letter-spacing: -2px; fill: #040a18; }
+    </style>
+  </defs>
+  <rect width="1400" height="420" fill="#f5f5e9"/>
+  <text class="word" x="105" y="225">magellan</text>
+  <line x1="766" y1="288" x2="1040" y2="288" stroke="#09476f" stroke-width="13" stroke-linecap="round"/>
+</svg>
