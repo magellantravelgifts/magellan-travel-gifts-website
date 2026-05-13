@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Magellan Square Social Logo</title>
+  <desc id="desc">A square social logo with compass mark and centered Magellan wordmark.</desc>
+  <defs>
+    <style>
+      .word { font-family: Avenir, Montserrat, Helvetica, Arial, sans-serif; font-size: 155px; font-weight: 700; letter-spacing: -1px; fill: #f5f5e9; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect width="1080" height="1080" fill="#040a18"/>
+  <g transform="translate(326 158)">
+    <circle cx="214" cy="214" r="150" fill="none" stroke="#c4c3b0" stroke-width="12"/>
+    <circle cx="214" cy="214" r="30" fill="#040a18" stroke="#f5f5e9" stroke-width="16"/>
+    <path fill="#f5f5e9" d="M214 0 L255 183 L428 214 L255 245 L214 428 L173 245 L0 214 L173 183 Z"/>
+    <path fill="#c4c3b0" d="M214 72 L235 195 L356 214 L235 233 L214 356 L193 233 L72 214 L193 195 Z"/>
+    <circle cx="214" cy="214" r="20" fill="#f5f5e9"/>
+  </g>
+  <text class="word" x="540" y="775">magellan</text>
+</svg>
