@@ -235,7 +235,7 @@ h3 {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(180deg, transparent 12%, rgba(4, 10, 24, .58));
+  background: linear-gradient(180deg, rgba(4, 10, 24, .02), rgba(4, 10, 24, .72));
 }
 
 .gallery-card-large {
@@ -268,12 +268,16 @@ h3 {
 }
 
 .gallery-card strong {
+  display: -webkit-box;
   max-width: 260px;
   margin-top: 6px;
   font-family: "Cormorant Garamond", Georgia, serif;
   font-size: 25px;
   font-weight: 650;
   line-height: 1;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .gallery-card img,
@@ -385,10 +389,11 @@ h3 {
 }
 
 .guide-card::after {
-  background: linear-gradient(180deg, rgba(4, 10, 24, .08), rgba(4, 10, 24, .78));
+  background: linear-gradient(180deg, rgba(4, 10, 24, .06), rgba(4, 10, 24, .84));
 }
 
 .guide-card strong {
+  display: -webkit-box;
   max-width: 300px;
   margin: 9px 0 12px;
   font-family: "Cormorant Garamond", Georgia, serif;
@@ -396,13 +401,20 @@ h3 {
   font-style: normal;
   font-weight: 650;
   line-height: .98;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .guide-card em {
+  display: -webkit-box;
   max-width: 330px;
   color: rgba(245, 245, 233, .86);
   font-style: normal;
   line-height: 1.45;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .product-section {
@@ -642,7 +654,7 @@ h3 {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(180deg, rgba(4, 10, 24, .05), rgba(4, 10, 24, .65));
+  background: linear-gradient(180deg, rgba(4, 10, 24, .06), rgba(4, 10, 24, .76));
 }
 
 .guide-feature-card span {
@@ -653,12 +665,16 @@ h3 {
 }
 
 .guide-feature-card strong {
+  display: -webkit-box;
   max-width: 330px;
   margin-top: 8px;
   font-family: "Cormorant Garamond", Georgia, serif;
   font-size: 34px;
   font-weight: 600;
   line-height: 1;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .guide-intro {
@@ -805,24 +821,25 @@ h3 {
 
 .guide-story {
   margin: 8px 0 0;
-  padding: 48px;
-  background: var(--navy);
-  color: var(--ivory);
+  padding: 38px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--navy);
 }
 
 .guide-story .eyebrow {
-  color: var(--sky);
+  color: var(--terracotta);
 }
 
 .guide-story h2 {
   max-width: 840px;
-  font-size: 54px;
+  font-size: 40px;
 }
 
 .guide-story p:not(.eyebrow) {
   max-width: 650px;
-  margin: 22px 0 0;
-  color: rgba(245, 245, 233, .78);
+  margin: 16px 0 0;
+  color: var(--muted);
   font-size: 18px;
 }
 
