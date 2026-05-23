@@ -1,0 +1,12 @@
+{
+  "name": "magellan-travel-gifts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "instagram:blob:status": "node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs --status",
+    "instagram:publish:dry-run": "node .agents/skills/magellan-etsy-instagram/scripts/publish_instagram_api.mjs --dry-run --include-future --limit 1"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^9.1.0"
+  }
+}
