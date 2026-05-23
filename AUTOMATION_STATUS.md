@@ -98,3 +98,39 @@ Required local/Netlify secrets:
 - `META_APP_ID`
 - `MAGELLAN_QUEUE_ADMIN_TOKEN`
 
+## Hosting And Domain Context
+
+Current decision:
+- Stay on Netlify for now.
+- Use Netlify Scheduled Functions for Instagram automation.
+- Consider buying `magellantravelgifts.com` separately for brand trust, Pinterest/Meta developer approval, and cleaner public URLs.
+
+Important distinction:
+- A custom domain is only the public address, for example `magellantravelgifts.com`.
+- Netlify, Cloudflare Pages, or GitHub Pages host the site.
+- Netlify Scheduled Functions, Cloudflare Workers, or GitHub Actions run automations.
+- Buying a domain does not itself run scheduled social posting.
+
+Netlify read:
+- Best short-term path because the site is already deployed and connected to GitHub.
+- Scheduler cost should be tiny for 1-3 posts/day.
+- Free plan has 300 credits/month; production deploys cost credits, so batch static site changes when practical.
+- Current static site has minimal build complexity: repo root is published, no build command.
+
+Cloudflare read:
+- Strong long-term option if wanting one technical stack for domain/DNS, static hosting, and scheduler.
+- Cloudflare Pages could host the static site.
+- Cloudflare Workers/Cron could run the scheduler.
+- More migration/setup than Netlify, but likely clean and low-cost after a domain purchase.
+
+GitHub Pages/Actions read:
+- Lowest-change alternative if leaving Netlify.
+- GitHub Pages can host the static site with a custom domain.
+- GitHub Actions can run scheduled posting.
+- Less polished as a hosting/product UI than Netlify or Cloudflare, but enough for a simple static site and scheduler.
+
+Domain recommendation:
+- If `magellantravelgifts.com` is reasonably priced, buying it is recommended.
+- It helps with Pinterest/Meta approval, domain verification, privacy policy legitimacy, and brand trust.
+- It does not require leaving Netlify immediately.
+- Clean near-term setup: `magellantravelgifts.com` points to the existing Netlify site; Netlify continues hosting and running the scheduler.
