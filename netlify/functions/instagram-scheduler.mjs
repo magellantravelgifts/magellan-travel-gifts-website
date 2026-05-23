@@ -7,7 +7,7 @@ const HISTORY_KEY = "post-history";
 const DEFAULT_LIMIT = 1;
 
 function env(name) {
-  return globalThis.Netlify?.env?.get(name) ?? process.env[name];
+  return globalThis.Netlify?.env?.get(name) || process.env[name];
 }
 
 function jsonResponse(body, status = 200) {
@@ -46,8 +46,19 @@ export default async () => {
   const igUserId = env("META_INSTAGRAM_BUSINESS_ID");
   const limit = Number(env("MAGELLAN_IG_SCHEDULER_LIMIT") || DEFAULT_LIMIT);
 
-  if (!token || !igUserId) {
-    return jsonResponse({ ok: false, error: "Missing Meta Instagram environment variables" }, 500);
+  const missing = [
+    ["META_PAGE_ACCESS_TOKEN", token],
+    ["META_INSTAGRAM_BUSINESS_ID", igUserId]
+  ].filter(([, value]) => !value).map(([name]) => name);
+
+  if (missing.length) {
+    return jsonResponse({
+      ok: false,
+      error: "Missing Meta Instagram environment variables",
+      missing,
+      hasNetlifyEnv: Boolean(globalThis.Netlify?.env),
+      hasProcessEnv: Boolean(process.env)
+    }, 500);
   }
 
   const store = getStore(STORE_NAME, { consistency: "strong" });
