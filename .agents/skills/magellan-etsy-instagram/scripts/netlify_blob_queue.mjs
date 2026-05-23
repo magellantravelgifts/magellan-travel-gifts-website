@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
-import { getStore } from "@netlify/blobs";
 
 const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
@@ -32,7 +31,8 @@ async function loadEnv(filePath = ".env") {
   }
 }
 
-function getBlobStore() {
+async function getBlobStore() {
+  const { getStore } = await import("@netlify/blobs");
   const siteID = process.env.NETLIFY_SITE_ID || process.env.NETLIFY_PROJECT_ID;
   const token = process.env.NETLIFY_AUTH_TOKEN || process.env.NETLIFY_BLOBS_TOKEN;
   if (!siteID || !token) {
@@ -78,7 +78,7 @@ if (!uploadPath && !downloadPath && !showStatus && !showHistory) {
   process.exit(2);
 }
 
-const store = useRemote ? null : getBlobStore();
+const store = useRemote ? null : await getBlobStore();
 
 if (uploadPath) {
   const queue = JSON.parse(await fs.readFile(uploadPath, "utf8"));
