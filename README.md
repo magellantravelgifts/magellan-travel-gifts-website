@@ -157,3 +157,4 @@ Build a scalable system that:
 - Ensure uniqueness across multi-asset outputs (especially Pinterest)
 - Keep outputs structured, reusable, and consistent
 - Treat listings, imagery, and distribution as a unified system
+- Check `AUTOMATION_STATUS.md` for the current Pinterest, Instagram, and Netlify scheduler state before changing automation workflows.
