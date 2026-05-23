@@ -33,8 +33,9 @@ export function imageUrlFor(item) {
 }
 
 export function isDue(item, now = new Date()) {
-  if (item.instagram_status === "published") return false;
-  if (item.instagram_status === "failed" || item.instagram_status === "blocked") return false;
+  const status = item.instagram_status || "queued";
+  if (status === "published") return false;
+  if (status === "failed" || status === "blocked") return false;
   if (item.instagram_ready === false) return false;
   const scheduled = item.instagram_scheduled_publish_time || item.scheduled_publish_time || item.date;
   if (!scheduled) return true;

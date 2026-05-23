@@ -70,7 +70,17 @@ export default async () => {
   const now = new Date();
   const dueItems = queue.filter((item) => isDue(item, now)).slice(0, limit);
   if (!dueItems.length) {
-    return jsonResponse({ ok: true, published: 0, checkedAt: now.toISOString() });
+    return jsonResponse({
+      ok: true,
+      published: 0,
+      total: queue.length,
+      statuses: queue.reduce((memo, item) => {
+        const status = item.instagram_status || "queued";
+        memo[status] = (memo[status] || 0) + 1;
+        return memo;
+      }, {}),
+      checkedAt: now.toISOString()
+    });
   }
 
   const publishedItems = [];
