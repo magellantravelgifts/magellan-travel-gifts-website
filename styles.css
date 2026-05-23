@@ -710,6 +710,7 @@ h3 {
   position: relative;
   display: flex;
   align-items: flex-end;
+  background: var(--ivory);
   aspect-ratio: 1 / 1;
   overflow: hidden;
   padding: 16px;
@@ -748,7 +749,7 @@ h3 {
   z-index: -2;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .guide-product-image:has(img)::before {
@@ -1062,13 +1063,12 @@ h3 {
   }
 
   .guide-product-card {
-    display: grid;
-    grid-template-columns: minmax(112px, 38%) minmax(0, 1fr);
+    display: block;
   }
 
   .guide-product-image {
-    aspect-ratio: auto;
-    min-height: 100%;
+    aspect-ratio: 1 / 1;
+    min-height: auto;
   }
 
   .guide-product-copy {
