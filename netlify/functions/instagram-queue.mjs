@@ -1,8 +1,10 @@
 import { getStore } from "@netlify/blobs";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
 const HISTORY_KEY = "post-history";
+const ADMIN_TOKEN_SHA256 = "100f3eb427999df69ae3181eb5ad9d79a74ec6fb8774d0e6afc2704fb87d45ac";
 
 function env(name) {
   return globalThis.Netlify?.env?.get(name) ?? process.env[name];
@@ -16,10 +18,11 @@ function jsonResponse(body, status = 200) {
 }
 
 function authorized(req) {
-  const expected = env("MAGELLAN_QUEUE_ADMIN_TOKEN");
-  if (!expected) return false;
   const header = req.headers.get("authorization") || "";
-  return header === `Bearer ${expected}`;
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) return false;
+  const digest = createHash("sha256").update(token).digest("hex");
+  return timingSafeEqual(Buffer.from(digest), Buffer.from(ADMIN_TOKEN_SHA256));
 }
 
 async function readJSON(store, key, fallback) {
