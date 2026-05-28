@@ -1,5 +1,9 @@
 import { getStore } from "@netlify/blobs";
-import { isDue, publishInstagramItem } from "../../.agents/skills/magellan-etsy-instagram/scripts/instagram_publish_lib.mjs";
+import {
+  findRecentInstagramDuplicate,
+  isDue,
+  publishInstagramItem
+} from "../../.agents/skills/magellan-etsy-instagram/scripts/instagram_publish_lib.mjs";
 
 const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
@@ -132,10 +136,23 @@ export default async () => {
 
   const workingQueue = claim.latestQueue;
   const publishedItems = [];
+  const skippedDuplicates = [];
   const failures = [];
 
   for (const item of claim.owned) {
     try {
+      const duplicate = await findRecentInstagramDuplicate(item, { token, igUserId });
+      if (duplicate) {
+        item.instagram_status = "published";
+        item.instagram_media_id = duplicate.id;
+        item.instagram_permalink = duplicate.permalink;
+        item.instagram_published_at = duplicate.timestamp || new Date().toISOString();
+        item.instagram_duplicate_detected_at = new Date().toISOString();
+        delete item.instagram_publish_lock;
+        delete item.instagram_publish_lock_at;
+        skippedDuplicates.push({ id: item.id, existing_media_id: duplicate.id, permalink: duplicate.permalink });
+        continue;
+      }
       await publishInstagramItem(item, { token, igUserId });
       delete item.instagram_publish_lock;
       delete item.instagram_publish_lock_at;
@@ -156,6 +173,7 @@ export default async () => {
   return jsonResponse({
     ok: failures.length === 0,
     published: publishedItems.length,
+    skippedDuplicates,
     failures,
     checkedAt: now.toISOString()
   }, failures.length ? 207 : 200);

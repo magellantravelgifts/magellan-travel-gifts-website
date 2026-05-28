@@ -28,6 +28,13 @@ export function captionFor(item) {
   return captionCompact([base, link ? `Shop\n${link}` : "", hashtagText].filter(Boolean).join("\n\n"), 2200);
 }
 
+export function captionBodyKey(caption) {
+  return captionCompact(caption, 2200)
+    .replace(/\n\nShop\n[\s\S]*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function imageUrlFor(item) {
   return item.instagram_image_url || item.generated_image_url || item.selected_image_url || item.image_url;
 }
@@ -74,6 +81,20 @@ async function graphGet(endpoint, params, token) {
     throw new Error(message);
   }
   return json;
+}
+
+export async function findRecentInstagramDuplicate(item, { token, igUserId, limit = 50 }) {
+  if (!token) throw new Error("Missing META_PAGE_ACCESS_TOKEN");
+  if (!igUserId) throw new Error("Missing META_INSTAGRAM_BUSINESS_ID");
+  const targetKey = captionBodyKey(captionFor(item));
+  if (!targetKey) return null;
+  const response = await graphGet(
+    `${igUserId}/media`,
+    { fields: "id,caption,timestamp,permalink", limit: String(limit) },
+    token
+  );
+  const posts = response.data || [];
+  return posts.find((post) => captionBodyKey(post.caption || "") === targetKey) || null;
 }
 
 function sleep(ms) {
