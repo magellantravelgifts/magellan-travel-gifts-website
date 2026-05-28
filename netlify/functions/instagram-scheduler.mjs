@@ -5,6 +5,7 @@ const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
 const HISTORY_KEY = "post-history";
 const DEFAULT_LIMIT = 1;
+const LOCK_SETTLE_MS = 2500;
 
 function env(name) {
   return globalThis.Netlify?.env?.get(name) || process.env[name];
@@ -39,6 +40,42 @@ async function appendHistory(store, publishedItems) {
     });
   }
   await store.setJSON(HISTORY_KEY, history);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runToken() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function claimDueItems(store, queue, now, limit) {
+  const dueItems = queue.filter((item) => isDue(item, now)).slice(0, limit);
+  if (!dueItems.length) return [];
+
+  const claimed = [];
+  const lockAt = new Date().toISOString();
+  for (const item of dueItems) {
+    item.instagram_status = "publishing";
+    item.instagram_publish_lock = runToken();
+    item.instagram_publish_lock_at = lockAt;
+    claimed.push({ id: item.id, token: item.instagram_publish_lock });
+  }
+
+  await store.setJSON(QUEUE_KEY, queue);
+  await sleep(LOCK_SETTLE_MS);
+
+  const latestQueue = await readJSON(store, QUEUE_KEY, []);
+  const owned = [];
+  for (const claim of claimed) {
+    const item = latestQueue.find((candidate) => candidate.id === claim.id);
+    if (item?.instagram_status === "publishing" && item.instagram_publish_lock === claim.token) {
+      owned.push(item);
+    }
+  }
+
+  return { latestQueue, owned };
 }
 
 export default async () => {
@@ -83,22 +120,37 @@ export default async () => {
     });
   }
 
+  const claim = await claimDueItems(store, queue, now, limit);
+  if (!claim.owned.length) {
+    return jsonResponse({
+      ok: true,
+      published: 0,
+      skipped: "Due item was claimed by another scheduler run",
+      checkedAt: new Date().toISOString()
+    });
+  }
+
+  const workingQueue = claim.latestQueue;
   const publishedItems = [];
   const failures = [];
 
-  for (const item of dueItems) {
+  for (const item of claim.owned) {
     try {
       await publishInstagramItem(item, { token, igUserId });
+      delete item.instagram_publish_lock;
+      delete item.instagram_publish_lock_at;
       publishedItems.push(item);
     } catch (error) {
       item.instagram_status = "failed";
       item.instagram_error = error.message;
       item.instagram_failed_at = new Date().toISOString();
+      delete item.instagram_publish_lock;
+      delete item.instagram_publish_lock_at;
       failures.push({ id: item.id, error: error.message });
     }
   }
 
-  await store.setJSON(QUEUE_KEY, queue);
+  await store.setJSON(QUEUE_KEY, workingQueue);
   await appendHistory(store, publishedItems);
 
   return jsonResponse({

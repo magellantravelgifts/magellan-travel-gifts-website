@@ -108,11 +108,15 @@ node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
 Every Instagram caption must include:
 
 - A concrete description of the posted product, written naturally and not copied from the Etsy title.
-- A succinct feeling-led line, not sales language.
+- A succinct feeling-led line that clearly relates to the specific destination, product, image, or use case.
 - The Etsy product link.
 - Exactly 5 recent/relevant hashtags.
 
 Do not start captions with Etsy listing titles or SEO-style product names. Instagram posts do not need titles; the preview should label items as internal post numbers, not public-facing titles.
+
+Caption language must vary by product. Avoid generic repeatable lines such as "travel-inspired print" or "room with a little more elsewhere in it" unless the item truly has no better signal. Use the item title, tags, category keywords, and description to identify concrete hooks such as Paris, New York, Sydney, coastal California, Lisbon, the Southwest, beach weekends, dorm decor, Euro summer, summer travel, or summer solstice.
+
+Approval batches must not repeat the same caption body across multiple posts. Similar products can share a broad mood, but each post needs distinct wording based on its color, destination, pattern, product type, image cue, or use case.
 
 Hashtag strategy:
 
@@ -126,7 +130,16 @@ Hashtag strategy:
 - Prefer 4:5 portrait images for product posts.
 - Probe all Etsy image candidates before publishing when available.
 - Select an Etsy image that already fits Instagram framing; do not use an image that would crop the product awkwardly.
+- Product image quality matters more than aspect-ratio perfection. Prefer the primary/catalog product image and early Etsy product-photo candidates over late listing images.
+- Never choose Etsy download-instruction, size-chart, policy, or informational images as publishable Instagram images.
+- Avoid all-white-background product photos for approval batches unless there is no styled alternative; mark for review instead of silently using an ugly image.
 - If no Etsy candidate is Instagram-safe, mark the item not ready and require a reviewed 4:5 crop/upload before publishing.
+
+## Seasonal Selection Rules
+
+- For May/June and other summer batches, avoid winter, Christmas, pine-tree holiday wrap, Halloween, sugar skull, fall-only, dark academia, witchcraft, and heavy cold-weather products.
+- Prefer summer travel, coastal, Euro summer, beach weekend, dorm/apartment decor, summer solstice, passport, carryall, pouch, wallet, scarf, mug, candle, and travel wall-art products.
+- Use the generated Etsy product URL from the Google Sheet catalog, such as `https://magellantravelgifts.etsy.com/listing/...`, as the product link source. Do not fall back to broad Etsy shop search URLs for approval batches unless explicitly accepted for that run.
 
 ## Scripts
 

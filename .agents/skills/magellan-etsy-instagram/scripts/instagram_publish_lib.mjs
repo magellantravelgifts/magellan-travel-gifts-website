@@ -36,6 +36,11 @@ export function isDue(item, now = new Date()) {
   const status = item.instagram_status || "queued";
   if (status === "published") return false;
   if (status === "failed" || status === "blocked") return false;
+  if (status === "publishing") {
+    const lockedAt = new Date(item.instagram_publish_lock_at || 0).getTime();
+    const stale = Number.isFinite(lockedAt) && now.getTime() - lockedAt > 2 * 60 * 60 * 1000;
+    if (!stale) return false;
+  }
   if (item.instagram_ready === false) return false;
   const scheduled = item.instagram_scheduled_publish_time || item.scheduled_publish_time || item.date;
   if (!scheduled) return true;
