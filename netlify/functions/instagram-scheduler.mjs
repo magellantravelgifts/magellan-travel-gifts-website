@@ -1,6 +1,5 @@
 import { getStore } from "@netlify/blobs";
 import {
-  findRecentInstagramDuplicate,
   isDue,
   publishInstagramItem
 } from "../../.agents/skills/magellan-etsy-instagram/scripts/instagram_publish_lib.mjs";
@@ -9,7 +8,8 @@ const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
 const HISTORY_KEY = "post-history";
 const DEFAULT_LIMIT = 1;
-const LOCK_SETTLE_MS = 2500;
+const LOCK_SETTLE_MS = 750;
+const STALE_LOCK_MS = 20 * 60 * 1000;
 
 function env(name) {
   return globalThis.Netlify?.env?.get(name) || process.env[name];
@@ -82,6 +82,22 @@ async function claimDueItems(store, queue, now, limit) {
   return { latestQueue, owned };
 }
 
+function clearStalePublishLocks(queue, now) {
+  let cleared = 0;
+  for (const item of queue) {
+    if (item.instagram_status !== "publishing") continue;
+    const lockedAt = new Date(item.instagram_publish_lock_at || 0).getTime();
+    const stale = !Number.isFinite(lockedAt) || now.getTime() - lockedAt > STALE_LOCK_MS;
+    if (!stale) continue;
+    item.instagram_status = "scheduled";
+    item.instagram_lock_cleared_at = now.toISOString();
+    delete item.instagram_publish_lock;
+    delete item.instagram_publish_lock_at;
+    cleared += 1;
+  }
+  return cleared;
+}
+
 export default async () => {
   const token = env("META_PAGE_ACCESS_TOKEN");
   const igUserId = env("META_INSTAGRAM_BUSINESS_ID");
@@ -109,6 +125,9 @@ export default async () => {
   }
 
   const now = new Date();
+  const clearedLocks = clearStalePublishLocks(queue, now);
+  if (clearedLocks) await store.setJSON(QUEUE_KEY, queue);
+
   const dueItems = queue.filter((item) => isDue(item, now)).slice(0, limit);
   if (!dueItems.length) {
     return jsonResponse({
@@ -120,6 +139,7 @@ export default async () => {
         memo[status] = (memo[status] || 0) + 1;
         return memo;
       }, {}),
+      clearedLocks,
       checkedAt: now.toISOString()
     });
   }
@@ -136,23 +156,10 @@ export default async () => {
 
   const workingQueue = claim.latestQueue;
   const publishedItems = [];
-  const skippedDuplicates = [];
   const failures = [];
 
   for (const item of claim.owned) {
     try {
-      const duplicate = await findRecentInstagramDuplicate(item, { token, igUserId });
-      if (duplicate) {
-        item.instagram_status = "published";
-        item.instagram_media_id = duplicate.id;
-        item.instagram_permalink = duplicate.permalink;
-        item.instagram_published_at = duplicate.timestamp || new Date().toISOString();
-        item.instagram_duplicate_detected_at = new Date().toISOString();
-        delete item.instagram_publish_lock;
-        delete item.instagram_publish_lock_at;
-        skippedDuplicates.push({ id: item.id, existing_media_id: duplicate.id, permalink: duplicate.permalink });
-        continue;
-      }
       await publishInstagramItem(item, { token, igUserId });
       delete item.instagram_publish_lock;
       delete item.instagram_publish_lock_at;
@@ -173,7 +180,7 @@ export default async () => {
   return jsonResponse({
     ok: failures.length === 0,
     published: publishedItems.length,
-    skippedDuplicates,
+    clearedLocks,
     failures,
     checkedAt: now.toISOString()
   }, failures.length ? 207 : 200);
