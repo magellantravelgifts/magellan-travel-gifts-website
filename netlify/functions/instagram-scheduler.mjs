@@ -10,6 +10,9 @@ const HISTORY_KEY = "post-history";
 const DEFAULT_LIMIT = 1;
 const LOCK_SETTLE_MS = 750;
 const STALE_LOCK_MS = 20 * 60 * 1000;
+const MAX_STALE_LOCK_CLEARS = 2;
+const NETLIFY_CONTAINER_ATTEMPTS = 2;
+const META_REQUEST_TIMEOUT_MS = 8000;
 
 function env(name) {
   return globalThis.Netlify?.env?.get(name) || process.env[name];
@@ -89,6 +92,17 @@ function clearStalePublishLocks(queue, now) {
     const lockedAt = new Date(item.instagram_publish_lock_at || 0).getTime();
     const stale = !Number.isFinite(lockedAt) || now.getTime() - lockedAt > STALE_LOCK_MS;
     if (!stale) continue;
+    item.instagram_lock_cleared_count = (Number(item.instagram_lock_cleared_count) || 0) + 1;
+    if (item.instagram_lock_cleared_count >= MAX_STALE_LOCK_CLEARS) {
+      item.instagram_status = "failed";
+      item.instagram_error = "Publishing lock expired repeatedly; item was skipped so the queue can continue.";
+      item.instagram_failed_at = now.toISOString();
+      item.instagram_lock_cleared_at = now.toISOString();
+      delete item.instagram_publish_lock;
+      delete item.instagram_publish_lock_at;
+      cleared += 1;
+      continue;
+    }
     item.instagram_status = "scheduled";
     item.instagram_lock_cleared_at = now.toISOString();
     delete item.instagram_publish_lock;
@@ -160,9 +174,15 @@ export default async () => {
 
   for (const item of claim.owned) {
     try {
-      await publishInstagramItem(item, { token, igUserId });
+      await publishInstagramItem(item, {
+        token,
+        igUserId,
+        containerAttempts: NETLIFY_CONTAINER_ATTEMPTS,
+        requestTimeoutMs: META_REQUEST_TIMEOUT_MS
+      });
       delete item.instagram_publish_lock;
       delete item.instagram_publish_lock_at;
+      delete item.instagram_lock_cleared_count;
       publishedItems.push(item);
     } catch (error) {
       item.instagram_status = "failed";

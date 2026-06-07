@@ -55,14 +55,29 @@ export function isDue(item, now = new Date()) {
   return Number.isFinite(timestamp) && timestamp <= now.getTime();
 }
 
-async function graphPost(endpoint, params, token) {
+async function graphRequest(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`Meta request timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function graphPost(endpoint, params, token, options = {}) {
   const body = new URLSearchParams(params);
   body.set("access_token", token);
 
-  const response = await fetch(`https://graph.facebook.com/v25.0/${endpoint}`, {
+  const response = await graphRequest(`https://graph.facebook.com/v25.0/${endpoint}`, {
     method: "POST",
     body
-  });
+  }, options.requestTimeoutMs);
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = json.error?.message || `HTTP ${response.status}`;
@@ -71,10 +86,14 @@ async function graphPost(endpoint, params, token) {
   return json;
 }
 
-async function graphGet(endpoint, params, token) {
+async function graphGet(endpoint, params, token, options = {}) {
   const query = new URLSearchParams(params);
   query.set("access_token", token);
-  const response = await fetch(`https://graph.facebook.com/v25.0/${endpoint}?${query.toString()}`);
+  const response = await graphRequest(
+    `https://graph.facebook.com/v25.0/${endpoint}?${query.toString()}`,
+    {},
+    options.requestTimeoutMs
+  );
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = json.error?.message || `HTTP ${response.status}`;
@@ -113,7 +132,7 @@ async function waitForContainer(containerId, token, attempts = 6) {
   throw new Error("Instagram media container was not ready in time");
 }
 
-export async function publishInstagramItem(item, { token, igUserId }) {
+export async function publishInstagramItem(item, { token, igUserId, containerAttempts = 6, requestTimeoutMs = 10000 } = {}) {
   if (!token) throw new Error("Missing META_PAGE_ACCESS_TOKEN");
   if (!igUserId) throw new Error("Missing META_INSTAGRAM_BUSINESS_ID");
   if (item.instagram_ready === false) throw new Error("Image was not marked Instagram-ready");
@@ -122,10 +141,11 @@ export async function publishInstagramItem(item, { token, igUserId }) {
   if (!imageUrl) throw new Error("Missing Instagram image URL");
 
   const caption = captionFor(item);
-  const container = await graphPost(`${igUserId}/media`, { image_url: imageUrl, caption }, token);
+  const requestOptions = { requestTimeoutMs };
+  const container = await graphPost(`${igUserId}/media`, { image_url: imageUrl, caption }, token, requestOptions);
   item.instagram_container_id = container.id;
-  await waitForContainer(container.id, token);
-  const published = await graphPost(`${igUserId}/media_publish`, { creation_id: container.id }, token);
+  await waitForContainer(container.id, token, containerAttempts);
+  const published = await graphPost(`${igUserId}/media_publish`, { creation_id: container.id }, token, requestOptions);
   item.instagram_status = "published";
   item.instagram_media_id = published.id;
   item.instagram_published_at = new Date().toISOString();
