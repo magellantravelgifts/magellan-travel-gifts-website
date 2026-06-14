@@ -1,7 +1,9 @@
 import { getStore } from "@netlify/blobs";
 import {
+  createInstagramContainer,
+  getInstagramContainerStatus,
   isDue,
-  publishInstagramItem
+  publishInstagramContainer
 } from "../../.agents/skills/magellan-etsy-instagram/scripts/instagram_publish_lib.mjs";
 
 const STORE_NAME = "magellan-instagram";
@@ -10,8 +12,7 @@ const HISTORY_KEY = "post-history";
 const DEFAULT_LIMIT = 1;
 const LOCK_SETTLE_MS = 750;
 const STALE_LOCK_MS = 20 * 60 * 1000;
-const MAX_STALE_LOCK_CLEARS = 2;
-const NETLIFY_CONTAINER_ATTEMPTS = 2;
+const MAX_STALE_LOCK_CLEARS = 12;
 const META_REQUEST_TIMEOUT_MS = 8000;
 
 function env(name) {
@@ -95,7 +96,7 @@ function clearStalePublishLocks(queue, now) {
     item.instagram_lock_cleared_count = (Number(item.instagram_lock_cleared_count) || 0) + 1;
     if (item.instagram_lock_cleared_count >= MAX_STALE_LOCK_CLEARS) {
       item.instagram_status = "failed";
-      item.instagram_error = "Publishing lock expired repeatedly; item was skipped so the queue can continue.";
+      item.instagram_error = "Publishing lock expired repeatedly after multiple retries; needs manual review.";
       item.instagram_failed_at = now.toISOString();
       item.instagram_lock_cleared_at = now.toISOString();
       delete item.instagram_publish_lock;
@@ -170,20 +171,34 @@ export default async () => {
 
   const workingQueue = claim.latestQueue;
   const publishedItems = [];
+  const containersCreated = [];
+  const pendingContainers = [];
   const failures = [];
 
   for (const item of claim.owned) {
     try {
-      await publishInstagramItem(item, {
-        token,
-        igUserId,
-        containerAttempts: NETLIFY_CONTAINER_ATTEMPTS,
-        requestTimeoutMs: META_REQUEST_TIMEOUT_MS
-      });
+      if (item.instagram_container_id) {
+        const status = await getInstagramContainerStatus(item.instagram_container_id, {
+          token,
+          requestTimeoutMs: META_REQUEST_TIMEOUT_MS
+        });
+        if (status.status_code === "FINISHED") {
+          await publishInstagramContainer(item, { token, igUserId, requestTimeoutMs: META_REQUEST_TIMEOUT_MS });
+          publishedItems.push(item);
+        } else if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
+          throw new Error(status.status || `Container ${status.status_code}`);
+        } else {
+          item.instagram_status = "container_created";
+          item.instagram_container_checked_at = new Date().toISOString();
+          pendingContainers.push({ id: item.id, container_id: item.instagram_container_id, status: status.status_code });
+        }
+      } else {
+        await createInstagramContainer(item, { token, igUserId, requestTimeoutMs: META_REQUEST_TIMEOUT_MS });
+        containersCreated.push({ id: item.id, container_id: item.instagram_container_id });
+      }
       delete item.instagram_publish_lock;
       delete item.instagram_publish_lock_at;
       delete item.instagram_lock_cleared_count;
-      publishedItems.push(item);
     } catch (error) {
       item.instagram_status = "failed";
       item.instagram_error = error.message;
@@ -200,6 +215,8 @@ export default async () => {
   return jsonResponse({
     ok: failures.length === 0,
     published: publishedItems.length,
+    containersCreated,
+    pendingContainers,
     clearedLocks,
     failures,
     checkedAt: now.toISOString()

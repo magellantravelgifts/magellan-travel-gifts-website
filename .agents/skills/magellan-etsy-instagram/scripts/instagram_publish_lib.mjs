@@ -120,9 +120,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export async function getInstagramContainerStatus(containerId, { token, requestTimeoutMs = 10000 } = {}) {
+  if (!token) throw new Error("Missing META_PAGE_ACCESS_TOKEN");
+  if (!containerId) throw new Error("Missing Instagram container ID");
+  return graphGet(containerId, { fields: "status_code,status" }, token, { requestTimeoutMs });
+}
+
 async function waitForContainer(containerId, token, attempts = 6) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const status = await graphGet(containerId, { fields: "status_code,status" }, token);
+    const status = await getInstagramContainerStatus(containerId, { token });
     if (status.status_code === "FINISHED") return status;
     if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
       throw new Error(status.status || `Container ${status.status_code}`);
@@ -130,6 +136,46 @@ async function waitForContainer(containerId, token, attempts = 6) {
     await sleep(3000);
   }
   throw new Error("Instagram media container was not ready in time");
+}
+
+export async function createInstagramContainer(item, { token, igUserId, requestTimeoutMs = 10000 } = {}) {
+  if (!token) throw new Error("Missing META_PAGE_ACCESS_TOKEN");
+  if (!igUserId) throw new Error("Missing META_INSTAGRAM_BUSINESS_ID");
+  if (item.instagram_ready === false) throw new Error("Image was not marked Instagram-ready");
+
+  const imageUrl = imageUrlFor(item);
+  if (!imageUrl) throw new Error("Missing Instagram image URL");
+
+  const caption = captionFor(item);
+  const container = await graphPost(
+    `${igUserId}/media`,
+    { image_url: imageUrl, caption },
+    token,
+    { requestTimeoutMs }
+  );
+  item.instagram_container_id = container.id;
+  item.instagram_status = "container_created";
+  item.instagram_container_created_at = new Date().toISOString();
+  delete item.instagram_error;
+  return { item, container };
+}
+
+export async function publishInstagramContainer(item, { token, igUserId, requestTimeoutMs = 10000 } = {}) {
+  if (!token) throw new Error("Missing META_PAGE_ACCESS_TOKEN");
+  if (!igUserId) throw new Error("Missing META_INSTAGRAM_BUSINESS_ID");
+  if (!item.instagram_container_id) throw new Error("Missing Instagram container ID");
+
+  const published = await graphPost(
+    `${igUserId}/media_publish`,
+    { creation_id: item.instagram_container_id },
+    token,
+    { requestTimeoutMs }
+  );
+  item.instagram_status = "published";
+  item.instagram_media_id = published.id;
+  item.instagram_published_at = new Date().toISOString();
+  delete item.instagram_error;
+  return { item, published };
 }
 
 export async function publishInstagramItem(item, { token, igUserId, containerAttempts = 6, requestTimeoutMs = 10000 } = {}) {
@@ -140,15 +186,7 @@ export async function publishInstagramItem(item, { token, igUserId, containerAtt
   const imageUrl = imageUrlFor(item);
   if (!imageUrl) throw new Error("Missing Instagram image URL");
 
-  const caption = captionFor(item);
-  const requestOptions = { requestTimeoutMs };
-  const container = await graphPost(`${igUserId}/media`, { image_url: imageUrl, caption }, token, requestOptions);
-  item.instagram_container_id = container.id;
+  const { container } = await createInstagramContainer(item, { token, igUserId, requestTimeoutMs });
   await waitForContainer(container.id, token, containerAttempts);
-  const published = await graphPost(`${igUserId}/media_publish`, { creation_id: container.id }, token, requestOptions);
-  item.instagram_status = "published";
-  item.instagram_media_id = published.id;
-  item.instagram_published_at = new Date().toISOString();
-  delete item.instagram_error;
-  return { item, published };
+  return publishInstagramContainer(item, { token, igUserId, requestTimeoutMs });
 }
