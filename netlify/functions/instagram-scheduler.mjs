@@ -1,6 +1,7 @@
 import { getStore } from "@netlify/blobs";
 import {
   createInstagramContainer,
+  findRecentInstagramDuplicate,
   getInstagramContainerStatus,
   isDue,
   publishInstagramContainer
@@ -9,11 +10,15 @@ import {
 const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
 const HISTORY_KEY = "post-history";
-const DEFAULT_LIMIT = 1;
-const LOCK_SETTLE_MS = 750;
-const STALE_LOCK_MS = 20 * 60 * 1000;
-const MAX_STALE_LOCK_CLEARS = 12;
+const RUN_LOCK_KEY = "scheduler-run-lock";
+const STALE_WORK_MS = 45 * 60 * 1000;
 const META_REQUEST_TIMEOUT_MS = 8000;
+
+const RECOVERABLE_STATUSES = new Set([
+  "publishing",
+  "container_creating",
+  "container_checking"
+]);
 
 function env(name) {
   return globalThis.Netlify?.env?.get(name) || process.env[name];
@@ -31,12 +36,25 @@ async function readJSON(store, key, fallback) {
   return value ?? fallback;
 }
 
+function statusCounts(queue) {
+  return queue.reduce((memo, item) => {
+    const status = item.instagram_status || "queued";
+    memo[status] = (memo[status] || 0) + 1;
+    return memo;
+  }, {});
+}
+
+function stale(timestamp, now, maxAgeMs = STALE_WORK_MS) {
+  const value = new Date(timestamp || 0).getTime();
+  return !Number.isFinite(value) || now.getTime() - value > maxAgeMs;
+}
+
 async function appendHistory(store, publishedItems) {
   if (!publishedItems.length) return;
   const history = await readJSON(store, HISTORY_KEY, { posts: [] });
   const seen = new Set(history.posts.map((post) => post.instagram_media_id));
   for (const item of publishedItems) {
-    if (seen.has(item.instagram_media_id)) continue;
+    if (!item.instagram_media_id || seen.has(item.instagram_media_id)) continue;
     history.posts.push({
       id: item.id,
       source_id: item.source_id,
@@ -50,177 +68,262 @@ async function appendHistory(store, publishedItems) {
   await store.setJSON(HISTORY_KEY, history);
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function runToken() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-async function claimDueItems(store, queue, now, limit) {
-  const dueItems = queue.filter((item) => isDue(item, now)).slice(0, limit);
-  if (!dueItems.length) return [];
-
-  const claimed = [];
-  const lockAt = new Date().toISOString();
-  for (const item of dueItems) {
-    item.instagram_status = "publishing";
-    item.instagram_publish_lock = runToken();
-    item.instagram_publish_lock_at = lockAt;
-    claimed.push({ id: item.id, token: item.instagram_publish_lock });
-  }
-
-  await store.setJSON(QUEUE_KEY, queue);
-  await sleep(LOCK_SETTLE_MS);
-
-  const latestQueue = await readJSON(store, QUEUE_KEY, []);
-  const owned = [];
-  for (const claim of claimed) {
-    const item = latestQueue.find((candidate) => candidate.id === claim.id);
-    if (item?.instagram_status === "publishing" && item.instagram_publish_lock === claim.token) {
-      owned.push(item);
-    }
-  }
-
-  return { latestQueue, owned };
-}
-
-function clearStalePublishLocks(queue, now) {
-  let cleared = 0;
+function recoverStaleItems(queue, now) {
+  const recovered = [];
   for (const item of queue) {
-    if (item.instagram_status !== "publishing") continue;
-    const lockedAt = new Date(item.instagram_publish_lock_at || 0).getTime();
-    const stale = !Number.isFinite(lockedAt) || now.getTime() - lockedAt > STALE_LOCK_MS;
-    if (!stale) continue;
-    item.instagram_lock_cleared_count = (Number(item.instagram_lock_cleared_count) || 0) + 1;
-    if (item.instagram_lock_cleared_count >= MAX_STALE_LOCK_CLEARS) {
-      item.instagram_status = "failed";
-      item.instagram_error = "Publishing lock expired repeatedly after multiple retries; needs manual review.";
-      item.instagram_failed_at = now.toISOString();
-      item.instagram_lock_cleared_at = now.toISOString();
-      delete item.instagram_publish_lock;
-      delete item.instagram_publish_lock_at;
-      cleared += 1;
-      continue;
+    const status = item.instagram_status;
+    if (!RECOVERABLE_STATUSES.has(status)) continue;
+    if (!stale(item.instagram_work_started_at || item.instagram_publish_lock_at, now)) continue;
+
+    if (item.instagram_container_id) {
+      item.instagram_status = "container_created";
+    } else {
+      item.instagram_status = "scheduled";
     }
-    item.instagram_status = "scheduled";
-    item.instagram_lock_cleared_at = now.toISOString();
+    item.instagram_recovered_at = now.toISOString();
+    item.instagram_recovery_count = (Number(item.instagram_recovery_count) || 0) + 1;
     delete item.instagram_publish_lock;
     delete item.instagram_publish_lock_at;
-    cleared += 1;
+    delete item.instagram_work_started_at;
+    recovered.push(item.id);
   }
-  return cleared;
+  return recovered;
+}
+
+async function acquireRunLock(store, now) {
+  const current = await readJSON(store, RUN_LOCK_KEY, null);
+  if (current?.started_at && !stale(current.started_at, now, 10 * 60 * 1000)) {
+    return null;
+  }
+  const lock = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    started_at: now.toISOString()
+  };
+  await store.setJSON(RUN_LOCK_KEY, lock);
+  const latest = await readJSON(store, RUN_LOCK_KEY, null);
+  return latest?.id === lock.id ? lock : null;
+}
+
+async function releaseRunLock(store, lock) {
+  const current = await readJSON(store, RUN_LOCK_KEY, null);
+  if (current?.id === lock.id) {
+    await store.setJSON(RUN_LOCK_KEY, { released_at: new Date().toISOString() });
+  }
+}
+
+function firstByStatus(queue, status) {
+  return queue.find((item) => item.instagram_status === status);
+}
+
+function firstDue(queue, now) {
+  return queue.find((item) => isDue(item, now));
+}
+
+async function saveAndReturn(store, queue, body, status = 200) {
+  await store.setJSON(QUEUE_KEY, queue);
+  return jsonResponse(body, status);
+}
+
+async function createContainerStep(store, queue, item, token, igUserId, now) {
+  item.instagram_status = "container_creating";
+  item.instagram_work_started_at = now.toISOString();
+  delete item.instagram_error;
+  await store.setJSON(QUEUE_KEY, queue);
+
+  await createInstagramContainer(item, {
+    token,
+    igUserId,
+    requestTimeoutMs: META_REQUEST_TIMEOUT_MS
+  });
+  delete item.instagram_work_started_at;
+  await store.setJSON(QUEUE_KEY, queue);
+  return {
+    action: "container_created",
+    id: item.id,
+    container_id: item.instagram_container_id
+  };
+}
+
+async function checkContainerStep(store, queue, item, token, now) {
+  item.instagram_status = "container_checking";
+  item.instagram_work_started_at = now.toISOString();
+  await store.setJSON(QUEUE_KEY, queue);
+
+  const status = await getInstagramContainerStatus(item.instagram_container_id, {
+    token,
+    requestTimeoutMs: META_REQUEST_TIMEOUT_MS
+  });
+
+  item.instagram_container_checked_at = new Date().toISOString();
+  delete item.instagram_work_started_at;
+
+  if (status.status_code === "FINISHED") {
+    item.instagram_status = "ready_to_publish";
+    await store.setJSON(QUEUE_KEY, queue);
+    return {
+      action: "container_ready",
+      id: item.id,
+      container_id: item.instagram_container_id
+    };
+  }
+
+  if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
+    item.instagram_status = "failed";
+    item.instagram_error = status.status || `Container ${status.status_code}`;
+    item.instagram_failed_at = new Date().toISOString();
+    await store.setJSON(QUEUE_KEY, queue);
+    return {
+      action: "container_failed",
+      id: item.id,
+      error: item.instagram_error
+    };
+  }
+
+  item.instagram_status = "container_created";
+  await store.setJSON(QUEUE_KEY, queue);
+  return {
+    action: "container_pending",
+    id: item.id,
+    container_id: item.instagram_container_id,
+    status: status.status_code
+  };
+}
+
+async function publishStep(store, queue, item, token, igUserId, now) {
+  const duplicate = await findRecentInstagramDuplicate(item, {
+    token,
+    igUserId,
+    limit: 50
+  });
+  if (duplicate) {
+    item.instagram_status = "published";
+    item.instagram_media_id = duplicate.id;
+    item.instagram_permalink = duplicate.permalink;
+    item.instagram_published_at = duplicate.timestamp || now.toISOString();
+    item.instagram_duplicate_detected_at = now.toISOString();
+    await store.setJSON(QUEUE_KEY, queue);
+    await appendHistory(store, [item]);
+    return {
+      action: "already_published",
+      id: item.id,
+      media_id: item.instagram_media_id,
+      permalink: item.instagram_permalink
+    };
+  }
+
+  item.instagram_status = "publish_requested";
+  item.instagram_publish_requested_at = now.toISOString();
+  await store.setJSON(QUEUE_KEY, queue);
+
+  await publishInstagramContainer(item, {
+    token,
+    igUserId,
+    requestTimeoutMs: META_REQUEST_TIMEOUT_MS
+  });
+  await store.setJSON(QUEUE_KEY, queue);
+  await appendHistory(store, [item]);
+  return {
+    action: "published",
+    id: item.id,
+    media_id: item.instagram_media_id
+  };
 }
 
 export default async () => {
   const token = env("META_PAGE_ACCESS_TOKEN");
   const igUserId = env("META_INSTAGRAM_BUSINESS_ID");
-  const limit = Number(env("MAGELLAN_IG_SCHEDULER_LIMIT") || DEFAULT_LIMIT);
-
   const missing = [
     ["META_PAGE_ACCESS_TOKEN", token],
     ["META_INSTAGRAM_BUSINESS_ID", igUserId]
   ].filter(([, value]) => !value).map(([name]) => name);
 
   if (missing.length) {
-    return jsonResponse({
-      ok: false,
-      error: "Missing Meta Instagram environment variables",
-      missing,
-      hasNetlifyEnv: Boolean(globalThis.Netlify?.env),
-      hasProcessEnv: Boolean(process.env)
-    }, 500);
+    return jsonResponse({ ok: false, error: "Missing Meta Instagram environment variables", missing }, 500);
   }
 
   const store = getStore(STORE_NAME, { consistency: "strong" });
-  const queue = await readJSON(store, QUEUE_KEY, []);
-  if (!Array.isArray(queue) || queue.length === 0) {
-    return jsonResponse({ ok: true, published: 0, skipped: "No queue in Netlify Blobs" });
+  const now = new Date();
+  const lock = await acquireRunLock(store, now);
+  if (!lock) {
+    return jsonResponse({ ok: true, action: "skipped", reason: "Scheduler run already active", checkedAt: now.toISOString() });
   }
 
-  const now = new Date();
-  const clearedLocks = clearStalePublishLocks(queue, now);
-  if (clearedLocks) await store.setJSON(QUEUE_KEY, queue);
+  try {
+    const queue = await readJSON(store, QUEUE_KEY, []);
+    if (!Array.isArray(queue) || queue.length === 0) {
+      return jsonResponse({ ok: true, action: "skipped", reason: "No queue in Netlify Blobs" });
+    }
 
-  const dueItems = queue.filter((item) => isDue(item, now)).slice(0, limit);
-  if (!dueItems.length) {
+    const recovered = recoverStaleItems(queue, now);
+    if (recovered.length) await store.setJSON(QUEUE_KEY, queue);
+
+    const ready = firstByStatus(queue, "ready_to_publish");
+    if (ready) {
+      const result = await publishStep(store, queue, ready, token, igUserId, now);
+      return jsonResponse({ ok: true, ...result, recovered, statuses: statusCounts(queue), checkedAt: new Date().toISOString() });
+    }
+
+    const publishRequested = firstByStatus(queue, "publish_requested");
+    if (publishRequested) {
+      const duplicate = await findRecentInstagramDuplicate(publishRequested, { token, igUserId, limit: 50 });
+      if (duplicate) {
+        publishRequested.instagram_status = "published";
+        publishRequested.instagram_media_id = duplicate.id;
+        publishRequested.instagram_permalink = duplicate.permalink;
+        publishRequested.instagram_published_at = duplicate.timestamp || now.toISOString();
+        publishRequested.instagram_duplicate_detected_at = now.toISOString();
+        await store.setJSON(QUEUE_KEY, queue);
+        await appendHistory(store, [publishRequested]);
+        return jsonResponse({
+          ok: true,
+          action: "publish_confirmed",
+          id: publishRequested.id,
+          media_id: publishRequested.instagram_media_id,
+          recovered,
+          statuses: statusCounts(queue),
+          checkedAt: new Date().toISOString()
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        action: "paused",
+        reason: "A publish request may have reached Instagram but has not appeared in recent media yet.",
+        id: publishRequested.id,
+        recovered,
+        statuses: statusCounts(queue),
+        checkedAt: new Date().toISOString()
+      });
+    }
+
+    const container = firstByStatus(queue, "container_created");
+    if (container) {
+      const result = await checkContainerStep(store, queue, container, token, now);
+      return jsonResponse({ ok: true, ...result, recovered, statuses: statusCounts(queue), checkedAt: new Date().toISOString() });
+    }
+
+    const due = firstDue(queue, now);
+    if (due) {
+      const result = await createContainerStep(store, queue, due, token, igUserId, now);
+      return jsonResponse({ ok: true, ...result, recovered, statuses: statusCounts(queue), checkedAt: new Date().toISOString() });
+    }
+
     return jsonResponse({
       ok: true,
-      published: 0,
-      total: queue.length,
-      statuses: queue.reduce((memo, item) => {
-        const status = item.instagram_status || "queued";
-        memo[status] = (memo[status] || 0) + 1;
-        return memo;
-      }, {}),
-      clearedLocks,
+      action: "idle",
+      recovered,
+      statuses: statusCounts(queue),
       checkedAt: now.toISOString()
     });
-  }
-
-  const claim = await claimDueItems(store, queue, now, limit);
-  if (!claim.owned.length) {
+  } catch (error) {
     return jsonResponse({
-      ok: true,
-      published: 0,
-      skipped: "Due item was claimed by another scheduler run",
+      ok: false,
+      action: "error",
+      error: error.message,
       checkedAt: new Date().toISOString()
-    });
+    }, 500);
+  } finally {
+    await releaseRunLock(store, lock);
   }
-
-  const workingQueue = claim.latestQueue;
-  const publishedItems = [];
-  const containersCreated = [];
-  const pendingContainers = [];
-  const failures = [];
-
-  for (const item of claim.owned) {
-    try {
-      if (item.instagram_container_id) {
-        const status = await getInstagramContainerStatus(item.instagram_container_id, {
-          token,
-          requestTimeoutMs: META_REQUEST_TIMEOUT_MS
-        });
-        if (status.status_code === "FINISHED") {
-          await publishInstagramContainer(item, { token, igUserId, requestTimeoutMs: META_REQUEST_TIMEOUT_MS });
-          publishedItems.push(item);
-        } else if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
-          throw new Error(status.status || `Container ${status.status_code}`);
-        } else {
-          item.instagram_status = "container_created";
-          item.instagram_container_checked_at = new Date().toISOString();
-          pendingContainers.push({ id: item.id, container_id: item.instagram_container_id, status: status.status_code });
-        }
-      } else {
-        await createInstagramContainer(item, { token, igUserId, requestTimeoutMs: META_REQUEST_TIMEOUT_MS });
-        containersCreated.push({ id: item.id, container_id: item.instagram_container_id });
-      }
-      delete item.instagram_publish_lock;
-      delete item.instagram_publish_lock_at;
-      delete item.instagram_lock_cleared_count;
-    } catch (error) {
-      item.instagram_status = "failed";
-      item.instagram_error = error.message;
-      item.instagram_failed_at = new Date().toISOString();
-      delete item.instagram_publish_lock;
-      delete item.instagram_publish_lock_at;
-      failures.push({ id: item.id, error: error.message });
-    }
-  }
-
-  await store.setJSON(QUEUE_KEY, workingQueue);
-  await appendHistory(store, publishedItems);
-
-  return jsonResponse({
-    ok: failures.length === 0,
-    published: publishedItems.length,
-    containersCreated,
-    pendingContainers,
-    clearedLocks,
-    failures,
-    checkedAt: now.toISOString()
-  }, failures.length ? 207 : 200);
 };
 
 export const config = {
