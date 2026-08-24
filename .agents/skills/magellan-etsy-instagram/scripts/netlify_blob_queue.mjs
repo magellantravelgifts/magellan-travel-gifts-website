@@ -69,12 +69,18 @@ const uploadPath = arg("upload");
 const downloadPath = arg("download");
 const showStatus = flag("status");
 const showHistory = flag("history");
+const showAlerts = flag("alerts");
+const showHealth = flag("health");
+const resetCircuit = flag("reset-circuit");
 const useRemote = flag("remote");
 
-if (!uploadPath && !downloadPath && !showStatus && !showHistory) {
+if (!uploadPath && !downloadPath && !showStatus && !showHistory && !showAlerts && !showHealth && !resetCircuit) {
   console.error("Usage: node netlify_blob_queue.mjs --upload outputs/instagram/YYYY-MM/instagram-posts.json");
   console.error("   or: node netlify_blob_queue.mjs --download outputs/instagram/YYYY-MM/instagram-posts.remote.json");
   console.error("   or: node netlify_blob_queue.mjs --status");
+  console.error("   or: node netlify_blob_queue.mjs --health --remote");
+  console.error("   or: node netlify_blob_queue.mjs --alerts --remote");
+  console.error("   or: node netlify_blob_queue.mjs --reset-circuit --remote");
   process.exit(2);
 }
 
@@ -125,4 +131,19 @@ if (showHistory) {
     ? await remoteRequest("GET", null, "?history=1")
     : await store.get(HISTORY_KEY, { type: "json" });
   console.log(JSON.stringify(history ?? { posts: [] }, null, 2));
+}
+
+if (showAlerts) {
+  if (!useRemote) throw new Error("--alerts currently requires --remote.");
+  console.log(JSON.stringify(await remoteRequest("GET", null, "?alerts=1"), null, 2));
+}
+
+if (showHealth) {
+  if (!useRemote) throw new Error("--health currently requires --remote.");
+  console.log(JSON.stringify(await remoteRequest("GET", null, "?health=1"), null, 2));
+}
+
+if (resetCircuit) {
+  if (!useRemote) throw new Error("--reset-circuit currently requires --remote.");
+  console.log(JSON.stringify(await remoteRequest("POST", null, "?circuit=reset"), null, 2));
 }

@@ -13,15 +13,20 @@ const HISTORY_KEY = "post-history";
 const ALERTS_KEY = "scheduler-alerts";
 const CIRCUIT_KEY = "scheduler-circuit";
 const RUN_LOCK_KEY = "scheduler-run-lock";
+const RUN_STATUS_KEY = "scheduler-run-status";
 
 const STALE_WORK_MS = 45 * 60 * 1000;
+const SCHEDULE_LEAD_MS = 5 * 60 * 1000;
 const META_REQUEST_TIMEOUT_MS = 5000;
 const ALERT_REQUEST_TIMEOUT_MS = 2000;
+const ALERT_EMAIL_TIMEOUT_MS = 3000;
 const CONTAINER_CHECK_ATTEMPTS = 2;
 const CONTAINER_CHECK_DELAY_MS = 1500;
-const MAX_ITEM_FAILURES = 3;
+const MAX_ITEM_FAILURES = 2;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const MAX_ALERTS = 100;
+const MAX_RUN_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 750;
 
 const RECOVERABLE_STATUSES = new Set([
   "publishing",
@@ -73,13 +78,18 @@ export function statusCounts(queue) {
   }, {});
 }
 
+export function isDueWithinLead(item, now = new Date(), leadMs = SCHEDULE_LEAD_MS) {
+  const horizon = new Date(now.getTime() + leadMs);
+  return isDue(item, horizon);
+}
+
 function stale(timestamp, now, maxAgeMs = STALE_WORK_MS) {
   const value = new Date(timestamp || 0).getTime();
   return !Number.isFinite(value) || now.getTime() - value > maxAgeMs;
 }
 
 export function queueNeedsWork(queue, now = new Date()) {
-  return queue.some((item) => IN_PROGRESS_STATUSES.has(item.instagram_status) || isDue(item, now));
+  return queue.some((item) => IN_PROGRESS_STATUSES.has(item.instagram_status) || isDueWithinLead(item, now));
 }
 
 function alertText(alert) {
@@ -117,7 +127,44 @@ async function deliverAlertWebhook(alert) {
   }
 }
 
-async function recordAlert(store, details) {
+export function failureFormBody(alert) {
+  return new URLSearchParams({
+    "form-name": "instagram-scheduler-failure",
+    subject: "Magellan Instagram scheduler job failed",
+    event: alert.event || "scheduler_failure",
+    message: alert.message || "Unknown scheduler failure",
+    item_id: alert.item_id || "none",
+    status: alert.status || "unknown",
+    attempts: String(alert.failure_count ?? MAX_RUN_ATTEMPTS),
+    circuit_status: alert.circuit_status || "closed",
+    occurred_at: alert.created_at || new Date().toISOString()
+  }).toString();
+}
+
+async function deliverAlertEmail(alert) {
+  const siteUrl = env("URL") || env("DEPLOY_PRIME_URL") || env("NETLIFY_SITE_URL");
+  if (!siteUrl) return { status: "not_configured", error: "Missing Netlify site URL" };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ALERT_EMAIL_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${siteUrl.replace(/\/$/, "")}/instagram-scheduler-alert.html`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      signal: controller.signal,
+      body: failureFormBody(alert)
+    });
+    if (!response.ok) return { status: "failed", error: `Netlify Forms HTTP ${response.status}` };
+    return { status: "submitted", submitted_at: new Date().toISOString() };
+  } catch (error) {
+    const message = error.name === "AbortError" ? "Netlify Forms timed out after 3 seconds" : error.message;
+    return { status: "failed", error: message };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function recordAlert(store, details, { email = false } = {}) {
   const alert = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     created_at: new Date().toISOString(),
@@ -131,11 +178,18 @@ async function recordAlert(store, details) {
   };
   const current = await readJSON(store, ALERTS_KEY, { alerts: [] });
   const alerts = Array.isArray(current.alerts) ? current.alerts : [];
-  alert.delivery = { status: "pending" };
+  alert.delivery = {
+    webhook: { status: "pending" },
+    email: { status: email ? "pending" : "not_requested" }
+  };
   alerts.unshift(alert);
   await store.setJSON(ALERTS_KEY, { alerts: alerts.slice(0, MAX_ALERTS) });
 
-  alert.delivery = await deliverAlertWebhook(alert);
+  const [webhookDelivery, emailDelivery] = await Promise.all([
+    deliverAlertWebhook(alert),
+    email ? deliverAlertEmail(alert) : Promise.resolve({ status: "not_requested" })
+  ]);
+  alert.delivery = { webhook: webhookDelivery, email: emailDelivery };
   await store.setJSON(ALERTS_KEY, { alerts: alerts.slice(0, MAX_ALERTS) });
   console.error(JSON.stringify({ instagram_scheduler_alert: alert }));
   return alert;
@@ -245,7 +299,7 @@ function nextItem(queue, now) {
   return queue.find((item) => item.instagram_status === "publish_requested")
     || queue.find((item) => item.instagram_status === "ready_to_publish")
     || queue.find((item) => item.instagram_status === "container_created")
-    || queue.find((item) => isDue(item, now));
+    || queue.find((item) => isDueWithinLead(item, now));
 }
 
 async function markDuplicatePublished(store, queue, item, duplicate, now) {
@@ -345,6 +399,41 @@ async function processItem(store, queue, item, token, igUserId, now) {
   return publishStep(store, queue, item, token, igUserId, now);
 }
 
+export function canRetryItem(item, error) {
+  if (error?.terminal || error?.manualReview) return false;
+  if (item.instagram_status === "publish_requested" || item.instagram_status === "manual_review") return false;
+  return true;
+}
+
+async function processItemWithOneRetry(store, queue, item, token, igUserId, now) {
+  try {
+    const result = await processItem(store, queue, item, token, igUserId, now);
+    return { ...result, attempts: 1, retried: false };
+  } catch (firstError) {
+    if (!canRetryItem(item, firstError)) {
+      firstError.attempts = 1;
+      throw firstError;
+    }
+
+    applyItemFailure(item, firstError, new Date());
+    item.instagram_retry_started_at = new Date().toISOString();
+    item.instagram_retry_reason = firstError.message;
+    await store.setJSON(QUEUE_KEY, queue);
+    await delay(RETRY_DELAY_MS);
+
+    try {
+      const result = await processItem(store, queue, item, token, igUserId, new Date());
+      item.instagram_retry_succeeded_at = new Date().toISOString();
+      delete item.instagram_retry_reason;
+      await store.setJSON(QUEUE_KEY, queue);
+      return { ...result, attempts: MAX_RUN_ATTEMPTS, retried: true };
+    } catch (secondError) {
+      secondError.attempts = MAX_RUN_ATTEMPTS;
+      throw secondError;
+    }
+  }
+}
+
 export function applyItemFailure(item, error, now) {
   item.instagram_failure_count = (Number(item.instagram_failure_count) || 0) + 1;
   item.instagram_error = error.message;
@@ -363,17 +452,49 @@ export function applyItemFailure(item, error, now) {
   return item.instagram_status;
 }
 
-export default async () => {
+async function finishRun(store, run, body, status = 200) {
+  const completedAt = new Date();
+  const runStatus = {
+    ...run,
+    completed_at: completedAt.toISOString(),
+    duration_ms: completedAt.getTime() - new Date(run.started_at).getTime(),
+    ok: body.ok !== false,
+    action: body.action || null,
+    item_id: body.id || body.item || null,
+    attempts: body.attempts || null,
+    statuses: body.statuses || null
+  };
+  try {
+    await store.setJSON(RUN_STATUS_KEY, runStatus);
+  } catch (error) {
+    console.error(JSON.stringify({ instagram_scheduler_run_status_error: error.message }));
+  }
+  return jsonResponse(body, status);
+}
+
+export default async (req) => {
   const store = getStore(STORE_NAME, { consistency: "strong" });
   const now = new Date();
+  const scheduledPayload = await req?.json?.().catch(() => ({})) || {};
+  const run = {
+    started_at: now.toISOString(),
+    next_run: scheduledPayload.next_run || null,
+    schedule_lead_minutes: SCHEDULE_LEAD_MS / 60000,
+    max_attempts: MAX_RUN_ATTEMPTS
+  };
+  try {
+    await store.setJSON(RUN_STATUS_KEY, { ...run, action: "started" });
+  } catch (error) {
+    console.error(JSON.stringify({ instagram_scheduler_run_status_error: error.message }));
+  }
 
   if (String(env("MAGELLAN_IG_SCHEDULER_ENABLED") || "false").toLowerCase() !== "true") {
-    return jsonResponse({ ok: true, action: "disabled", checkedAt: now.toISOString() });
+    return finishRun(store, run, { ok: true, action: "disabled", checkedAt: now.toISOString() });
   }
 
   const circuit = await readCircuit(store);
   if (circuit.status === "open") {
-    return jsonResponse({
+    return finishRun(store, run, {
       ok: false,
       action: "circuit_open",
       reason: circuit.reason,
@@ -401,13 +522,13 @@ export default async () => {
       event: "configuration_error",
       message: configurationCircuit.last_error,
       circuit_status: "open"
-    });
-    return jsonResponse({ ok: false, action: "configuration_error", missing }, 500);
+    }, { email: true });
+    return finishRun(store, run, { ok: false, action: "configuration_error", missing }, 500);
   }
 
   const queue = await readJSON(store, QUEUE_KEY, []);
   if (!Array.isArray(queue) || queue.length === 0) {
-    return jsonResponse({ ok: true, action: "idle", reason: "No queue in Netlify Blobs" });
+    return finishRun(store, run, { ok: true, action: "idle", reason: "No queue in Netlify Blobs" });
   }
 
   const recovery = recoverStaleItems(queue, now);
@@ -417,26 +538,26 @@ export default async () => {
       severity: recovery.failed.length ? "error" : "warning",
       event: "stale_work_recovered",
       message: `Recovered ${recovery.recovered.length} stale item(s); stopped ${recovery.failed.length} item(s).`
-    });
+    }, { email: recovery.failed.length > 0 });
   }
 
   if (!queueNeedsWork(queue, now)) {
-    return jsonResponse({ ok: true, action: "idle", statuses: statusCounts(queue), checkedAt: now.toISOString() });
+    return finishRun(store, run, { ok: true, action: "idle", statuses: statusCounts(queue), checkedAt: now.toISOString() });
   }
 
   const lock = await acquireRunLock(store, now);
   if (!lock) {
-    return jsonResponse({ ok: true, action: "skipped", reason: "Scheduler run already active", checkedAt: now.toISOString() });
+    return finishRun(store, run, { ok: true, action: "skipped", reason: "Scheduler run already active", checkedAt: now.toISOString() });
   }
 
   let item = null;
   try {
     item = nextItem(queue, now);
     if (!item) {
-      return jsonResponse({ ok: true, action: "idle", statuses: statusCounts(queue), checkedAt: now.toISOString() });
+      return finishRun(store, run, { ok: true, action: "idle", statuses: statusCounts(queue), checkedAt: now.toISOString() });
     }
 
-    const result = await processItem(store, queue, item, token, igUserId, now);
+    const result = await processItemWithOneRetry(store, queue, item, token, igUserId, now);
     if (result.action === "container_pending") {
       await recordAlert(store, {
         severity: "warning",
@@ -448,7 +569,17 @@ export default async () => {
     } else {
       await registerCircuitSuccess(store, new Date());
     }
-    return jsonResponse({
+    if (result.retried) {
+      await recordAlert(store, {
+        severity: "warning",
+        event: "scheduler_retry_succeeded",
+        message: "The first publishing attempt failed; the single guarded retry succeeded",
+        item_id: item.id,
+        status: item.instagram_status,
+        failure_count: item.instagram_failure_count
+      });
+    }
+    return finishRun(store, run, {
       ok: true,
       ...result,
       recovery,
@@ -469,13 +600,14 @@ export default async () => {
       status: item?.instagram_status,
       failure_count: item?.instagram_failure_count,
       circuit_status: updatedCircuit.status
-    });
-    return jsonResponse({
+    }, { email: true });
+    return finishRun(store, run, {
       ok: false,
       action: "error",
       error: error.message,
       item: item?.id || null,
       itemStatus: item?.instagram_status || null,
+      attempts: error.attempts || 1,
       circuit: updatedCircuit,
       statuses: statusCounts(queue),
       checkedAt: new Date().toISOString()
@@ -486,7 +618,8 @@ export default async () => {
 };
 
 export const config = {
-  // 01:30, 16:30, 19:30, and 22:30 UTC. During Aug/Sep PDT these are
-  // 18:30 (previous UTC day), 09:30, 12:30, and 15:30 America/Los_Angeles.
-  schedule: "30 1,16,19,22 * * *"
+  // Run five minutes before the 09:30, 12:30, 15:30, and 18:30 Pacific
+  // publishing targets. During Aug/Sep PDT these are 16:25, 19:25, 22:25,
+  // and 01:25 UTC (the last on the following UTC date).
+  schedule: "25 1,16,19,22 * * *"
 };

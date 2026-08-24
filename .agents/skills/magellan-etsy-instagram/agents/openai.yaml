@@ -1,0 +1,4 @@
+interface:
+  display_name: "Magellan Instagram Automation"
+  short_description: "Build reviewed static Instagram queues"
+  default_prompt: "Use $magellan-etsy-instagram to build and preview a reviewed static Instagram automation."

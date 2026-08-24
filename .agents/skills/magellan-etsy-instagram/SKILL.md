@@ -1,81 +1,226 @@
 ---
 name: magellan-etsy-instagram
-description: Automate Magellan Travel Gifts Instagram publishing from reviewed Etsy product queues, image URLs, or product metadata using the Meta Instagram Graph API.
+description: Build, review, schedule, and upload Magellan Travel Gifts static Instagram feed automations from the approved Google Sheets product catalog, with exact collection filtering, Etsy or Shopify destinations, image and caption QA, a single batch-approval gate, and Netlify Blob scheduling. Use when Codex needs to prepare a complete Instagram posting queue, refresh a monthly queue, preview posts, or upload an approved queue for automated publishing.
 ---
 
-# Magellan Etsy Instagram
+# Magellan Instagram Automation
 
-## Overview
+Build a complete static-feed automation in one invocation, but never upload or publish it without one explicit batch approval. Keep Instagram operationally separate from Pinterest.
 
-Use this skill to prepare, preview, and publish Magellan Travel Gifts Instagram posts from approved product metadata. Instagram is separate from Pinterest: it uses Meta app credentials, an Instagram Business Account ID, and media container publishing.
+## Fixed account and scheduler
 
-Brand direction: clean, warm, aspirational, travel-inspired, and product-aware without sounding like an ad. Keep the language closer to boutique travel goods, considered gifting, memory-based travel, elevated accessories, coastal/desert/European mood, and accessible luxury than to hard selling.
-
-Confirmed account IDs:
-
-- Facebook Page ID: `104486471856540`
-- Instagram Business Account ID: `17841447449196210`
 - Instagram username: `magellantravelgifts`
+- Instagram Business Account ID: `17841447449196210`
+- Facebook Page ID: `104486471856540`
+- Netlify Blob store: `magellan-instagram`
+- Queue key: `monthly-queue`
+- Scheduled Function cadence: four fixed daily execution windows
+- Default posting windows: `09:30`, `12:30`, `15:30`, and `18:30` in `America/Los_Angeles`
+- Netlify execution windows for August and September (PDT): `09:25`, `12:25`, `15:25`, and `18:25` Pacific
+- Netlify UTC cron for August and September (PDT): `25 1,16,19,22 * * *`
 
-## Credentials
+The cron runs at 01:25, 16:25, 19:25, and 22:25 UTC. In August and September
+these correspond to 18:25 on the prior UTC date, then 09:25, 12:25, and 15:25
+Pacific. Each run may select one post scheduled within the next five minutes,
+so the public posting targets remain 09:30, 12:30, 15:30, and 18:30 while
+absorbing normal platform invocation delay. Netlify cron is UTC-only; after the daylight-saving transition these
+windows occur one hour earlier in Pacific time unless the cron is deliberately
+updated in a reviewed production deployment.
 
-Keep credentials in the project `.env` file:
+Keep secrets in the project `.env` and never commit it:
 
 ```bash
 META_APP_ID=1753417952316133
 META_FACEBOOK_PAGE_ID=104486471856540
 META_INSTAGRAM_BUSINESS_ID=17841447449196210
 META_PAGE_ACCESS_TOKEN=...
+MAGELLAN_QUEUE_ADMIN_TOKEN=...
+MAGELLAN_IG_SCHEDULER_ENABLED=false
+MAGELLAN_IG_ALERT_WEBHOOK_URL=...
+# Optional when the alert endpoint requires bearer authentication:
+MAGELLAN_IG_ALERT_WEBHOOK_BEARER_TOKEN=...
 ```
 
-Never commit `.env`.
+Keep `MAGELLAN_IG_SCHEDULER_ENABLED=false` while no approved queue is active.
+Set it to `true` only when an approved batch is ready to publish. Enabling the
+scheduler or resetting its circuit breaker can cause due posts to publish and
+therefore requires explicit user approval.
 
-## Workflow
+## Predictable scheduling and cost controls
 
-Prepare Instagram-specific posts first:
+- Use one to four fixed daily times; never randomize posting times.
+- Default to the four Pacific windows above. Use fewer windows only when the
+  user requests a lower cadence.
+- Schedule at most one post in each window.
+- The scheduler makes at most four scheduled runs per day.
+- A run processes at most one post and uses bounded Meta request timeouts.
+- A recoverable failure gets exactly one guarded retry inside the same scheduled
+  invocation, so normal usage remains four job requests per day. A post stops
+  after two failed attempts. Ambiguous publish responses go directly to
+  `manual_review` so the scheduler cannot create a duplicate post.
+- Three consecutive scheduler failures open the circuit breaker. An open
+  circuit blocks all further Meta calls until the user reviews the alert and
+  explicitly approves a reset.
+- Completed or future-only queues exit before acquiring a run lock.
+
+## Failure alerts
+
+Every scheduler error, stale-work recovery, delayed container, and circuit-breaker
+event is retained in the `scheduler-alerts` Netlify Blob (latest 100 records)
+and written to the function log. When `MAGELLAN_IG_ALERT_WEBHOOK_URL` is set,
+the same alert is sent once to that webhook with a two-second timeout.
+
+Final job failures also submit the hidden Netlify form
+`instagram-scheduler-failure`. Configure a form-submission email notification
+for that exact form in Netlify. This uses no extra scheduled-function request;
+it creates one form submission only after both safe publishing attempts fail.
+Do not claim email alerting is active until the form notification is configured
+and a test submission is received.
+
+Before enabling a campaign:
+
+1. Configure and test the `instagram-scheduler-failure` Netlify Forms email
+   notification; configure the optional webhook separately when wanted.
+2. Confirm `--health --remote` reports a closed circuit.
+3. Confirm the approved queue has no `failed` or `manual_review` items.
+4. Set `MAGELLAN_IG_SCHEDULER_ENABLED=true` only with explicit approval.
+
+Resetting the circuit is a publish-enabling action. Show the latest alert and
+affected queue item first, then obtain explicit approval for:
+
+```bash
+node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
+  --reset-circuit \
+  --remote
+```
+
+## Source-of-truth order
+
+Read both workbooks live before every build. Treat them as read-only unless the user separately asks for spreadsheet edits.
+
+1. Automation catalog: [Magellan Product Tracker - Collections Updated](https://docs.google.com/spreadsheets/d/1cFNSrO9m9-ivRTqhO5r4bphVCITH6ORjepzyyeAxtew/edit?gid=675421768#gid=675421768), exact tab `Products`, `sheetId=675421768`.
+   - Required fields: `Product Name`, `Primary Image URL`, `Etsy Listing URL / Search Link`, `Tags`, `Short Description Draft`, `SKU`, `Magellan Listing URL`, `Collection`, all three `Instagram 4:5` options, and `Social Post Description (Folder Source)`.
+2. Readiness tracker: [Magellan Product & Collection Status Tracker](https://docs.google.com/spreadsheets/d/1PSa1_8wcAOXTzLAZjwufb2Fgf_GNkTYZsNDmlBdVTyE/edit?gid=944366256#gid=944366256), exact tab `Product Tracker`, `sheetId=944366256`.
+   - Require `6 Product on Etsy=Yes`, `7 Product on Magellan Site=Yes`, both exact listing URLs, and a matching collection-constrained product row.
+   - Preserve all user-maintained status fields.
+
+If the workbooks conflict, exclude the row and report it. Do not guess a URL, cross-match another collection, or substitute a generic Etsy search link.
+
+## Default Euro Summer scope
+
+When the user requests the approved Euro Summer focus, include only:
+
+- `Positano Citrus`
+- `Santorini Blue`
+- `Capri Club`
+- `Riviera Cabana` as the catalog name for French Riviera
+- `Costa Brava Market`
+- `Saint Tropez Sunset`
+- `Euro Summer Word Tees`, restricted to `Amour Tee`, `Ciao Script Tee`, and `Ciao Bella Script Tee`
+
+Exclude every other row merely tagged `Euro Summer`, every other Euro Summer folder, and every non-listed word tee. Apply the collection allowlist before product selection, scheduling, or randomization.
+
+## One-invocation build
+
+Given a date range, cadence, theme, and destination policy, complete these phases without asking the user to run intermediate commands:
+
+1. Read spreadsheet metadata, then bounded source rows from both workbooks.
+2. Normalize only eligible products into a local source queue.
+3. Apply the exact collection and word-tee allowlists.
+4. Prefer the catalog's `Instagram 4:5` options in listed order; fall back to `Primary Image URL` only when it is visually suitable.
+5. Assign products across the requested dates while avoiding recent products in `outputs/instagram/post-history.json`.
+6. Generate distinct captions, exactly five hashtags, one destination link, and a scheduled local publish time for every item.
+7. Write the JSON queue, review CSV, preview HTML, and a concise build summary.
+8. Dry-run at least one queue item and validate every row.
+9. Stop with `APPROVAL_REQUIRED`. Present the preview path, item count, collection counts, excluded rows, storefront-link counts, and any not-ready items.
+10. After the user explicitly approves the named batch, mark the items approved and upload that exact queue to Netlify Blobs. Do not rebuild between approval and upload.
+
+A request to build or preview is not approval to upload. Uploading the queue authorizes the scheduler to publish all due approved items, so approval must name the batch or output path.
+
+## Destination policy
+
+Support:
+
+- `etsy`: use the exact Etsy listing URL.
+- `shopify`: use the exact `Magellan Listing URL`.
+- `balanced`: alternate storefront destinations within each collection and keep totals as even as possible.
+
+Record `destination_storefront`, `etsy_url`, `shopify_url`, and the selected `link` on every queue item. The creative and caption body may stay the same across storefront variants; only the final shop line and URL may change. Do not put both purchase URLs in one caption.
+
+For the current storewide promotion, mention `20% off storewide` and `STUDYEUROPE20` only when the user confirms that the code is active for the scheduled date. Do not state a product price when the catalog price is blank.
+
+## Caption contract
+
+Every caption must contain:
+
+- a concrete description of the shown product;
+- a feeling-led line tied to the exact destination, pattern, product, or use case;
+- one `Shop` line and the selected exact listing URL;
+- exactly five relevant hashtags.
+
+Keep the voice clean, warm, aspirational, travel-inspired, product-aware, and lightly promotional. Do not start with an Etsy title. Do not repeat caption bodies in an approval batch. Avoid generic filler, emojis, broad hashtag stacks, and `#MagellanTravelGifts`.
+
+Use two niche/category hashtags, one aesthetic or trend tag, one audience/use-case tag, and one contextual travel or decor tag.
+
+## Static-image contract
+
+- Publish static feed images only unless the user separately asks to extend the workflow.
+- Prefer 4:5 portrait, within Instagram's supported 4:5 to 1.91:1 range.
+- Keep the product readable and uncropped.
+- Reject policy slides, size charts, download instructions, informational images, and awkward all-white mockups.
+- If no acceptable image exists, set `instagram_ready=false`; never silently publish a weak substitute.
+- Probe remote image dimensions when practical and visually inspect campaign-sensitive selections.
+
+## Queue validation
+
+Before approval, verify:
+
+- every row is inside the requested allowlist;
+- both source workbooks support the product and URLs;
+- every selected destination matches `destination_storefront`;
+- every item has an image, unique caption body, exactly five hashtags, and a scheduled time;
+- every sale reference is valid for the scheduled date;
+- no item is already published;
+- no future item was prematurely posted;
+- not-ready items cannot pass the upload gate.
+
+## Commands
+
+Prepare Instagram posts from the normalized source queue:
 
 ```bash
 node .agents/skills/magellan-etsy-instagram/scripts/prepare_instagram_posts.mjs \
-  --queue outputs/pinterest/YYYY-MM-DD/daily-pins.json \
-  --output-dir outputs/instagram/YYYY-MM-DD
+  --queue outputs/instagram/YYYY-MM/source-products.json \
+  --output-dir outputs/instagram/YYYY-MM
 ```
 
-Review:
+Schedule the reviewed queue when a uniform daily schedule is appropriate:
 
 ```bash
-open outputs/instagram/YYYY-MM-DD/preview.html
+node .agents/skills/magellan-etsy-instagram/scripts/schedule_instagram_posts.mjs \
+  --queue outputs/instagram/YYYY-MM/instagram-posts.json \
+  --start-date YYYY-MM-DD \
+  --days 30 \
+  --times 09:30,12:30,15:30,18:30 \
+  --time-zone America/Los_Angeles
 ```
 
-Dry-run the publisher:
+The times and time zone shown above are the defaults and are written as explicit
+UTC-offset timestamps. For five posts per week, assign the exact five dates per
+week in the queue instead of using a command that creates seven daily slots.
+Never place two posts in the same daily window.
+
+Dry-run before approval:
 
 ```bash
 node .agents/skills/magellan-etsy-instagram/scripts/publish_instagram_api.mjs \
-  --queue outputs/instagram/YYYY-MM-DD/instagram-posts.json \
+  --queue outputs/instagram/YYYY-MM/instagram-posts.json \
   --dry-run \
   --include-future \
   --limit 1
 ```
 
-Publish one approved due item:
-
-```bash
-node .agents/skills/magellan-etsy-instagram/scripts/publish_instagram_api.mjs \
-  --queue outputs/instagram/YYYY-MM-DD/instagram-posts.json \
-  --publish \
-  --limit 1
-```
-
-Set local due times on the prepared queue:
-
-```bash
-node .agents/skills/magellan-etsy-instagram/scripts/schedule_instagram_posts.mjs \
-  --queue outputs/instagram/YYYY-MM-DD/instagram-posts.json \
-  --times 09:30,14:00,18:30 \
-  --start-date YYYY-MM-DD \
-  --days 30
-```
-
-Upload approved/scheduled posts to Netlify Blobs for the hourly scheduler:
+Upload only after explicit approval:
 
 ```bash
 node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
@@ -83,7 +228,7 @@ node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
   --remote
 ```
 
-Check remote queue status:
+Verify the remote queue after upload:
 
 ```bash
 node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
@@ -91,59 +236,22 @@ node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
   --remote
 ```
 
-## Queue Rules
+Check scheduler health and recent alerts without changing remote state:
 
-- Treat Pinterest queue files as shared product metadata only, not a Pinterest dependency.
-- Use `instagram_image_url`, `generated_image_url`, `selected_image_url`, or `image_url`, in that order.
-- Use `instagram_caption` when present; otherwise build a caption from the product description/title/link.
-- Do not publish future scheduled items unless explicitly passed `--include-future`.
-- Do not publish items marked `instagram_ready: false` unless explicitly passed `--allow-not-ready`.
-- Use `--dry-run` before any live post.
-- Netlify production scheduling reads and writes the approved queue from the `magellan-instagram` Blob store under key `monthly-queue`.
-- The Netlify Scheduled Function runs hourly and publishes only due posts.
-- The protected `/api/instagram-queue` function uploads/checks the queue using `MAGELLAN_QUEUE_ADMIN_TOKEN`.
+```bash
+node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
+  --health \
+  --remote
 
-## Caption Rules
+node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
+  --alerts \
+  --remote
+```
 
-Every Instagram caption must include:
+## Handoff
 
-- A concrete description of the posted product, written naturally and not copied from the Etsy title.
-- A succinct feeling-led line that clearly relates to the specific destination, product, image, or use case.
-- The Etsy product link.
-- Exactly 5 recent/relevant hashtags.
-
-Do not start captions with Etsy listing titles or SEO-style product names. Instagram posts do not need titles; the preview should label items as internal post numbers, not public-facing titles.
-
-Caption language must vary by product. Avoid generic repeatable lines such as "travel-inspired print" or "room with a little more elsewhere in it" unless the item truly has no better signal. Use the item title, tags, category keywords, and description to identify concrete hooks such as Paris, New York, Sydney, coastal California, Lisbon, the Southwest, beach weekends, dorm decor, Euro summer, summer travel, or summer solstice.
-
-Approval batches must not repeat the same caption body across multiple posts. Similar products can share a broad mood, but each post needs distinct wording based on its color, destination, pattern, product type, image cue, or use case.
-
-Hashtag strategy:
-
-- Use 2 niche/category tags, 1 aesthetic or trend tag, 1 audience/use-case tag, and 1 contextual travel/decor tag.
-- Prefer specific tags such as `#TravelAccessories`, `#TravelWallArt`, `#SouthwestStyle`, `#CoastalStyle`, `#EuropeanSummer`, `#WanderlustDecor`, and `#GiftsForTravelers`.
-- Avoid broad filler tags like `#love`, `#instagood`, `#shopnow`, long generic stacks, or low-utility branded tags such as `#MagellanTravelGifts`.
-
-## Image Rules
-
-- Instagram feed images should be safe within the 4:5 to 1.91:1 aspect-ratio range.
-- Prefer 4:5 portrait images for product posts.
-- Probe all Etsy image candidates before publishing when available.
-- Select an Etsy image that already fits Instagram framing; do not use an image that would crop the product awkwardly.
-- Product image quality matters more than aspect-ratio perfection. Prefer the primary/catalog product image and early Etsy product-photo candidates over late listing images.
-- Never choose Etsy download-instruction, size-chart, policy, or informational images as publishable Instagram images.
-- Avoid all-white-background product photos for approval batches unless there is no styled alternative; mark for review instead of silently using an ugly image.
-- If no Etsy candidate is Instagram-safe, mark the item not ready and require a reviewed 4:5 crop/upload before publishing.
-
-## Seasonal Selection Rules
-
-- For May/June and other summer batches, avoid winter, Christmas, pine-tree holiday wrap, Halloween, sugar skull, fall-only, dark academia, witchcraft, and heavy cold-weather products.
-- Prefer summer travel, coastal, Euro summer, beach weekend, dorm/apartment decor, summer solstice, passport, carryall, pouch, wallet, scarf, mug, candle, and travel wall-art products.
-- Use the generated Etsy product URL from the Google Sheet catalog, such as `https://magellantravelgifts.etsy.com/listing/...`, as the product link source. Do not fall back to broad Etsy shop search URLs for approval batches unless explicitly accepted for that run.
-
-## Scripts
-
-- `scripts/prepare_instagram_posts.mjs`: turns reviewed product queue items into Instagram-specific post objects, generates captions/hashtags, checks Etsy image dimensions, selects an Instagram-safe image, and writes a preview.
-- `scripts/schedule_instagram_posts.mjs`: adds `instagram_scheduled_publish_time` values to approved queue items so the publisher only posts when items are due.
-- `scripts/publish_instagram_api.mjs`: creates an Instagram media container, publishes it, updates the queue item with Instagram IDs, and appends `outputs/instagram/post-history.json`.
-- `scripts/netlify_blob_queue.mjs`: uploads/downloads/checks the approved queue in Netlify Blobs for production scheduling.
+Report the source ranges, output paths, scheduled count, posting targets and
+five-minute-early execution windows,
+collection counts, Etsy/Shopify link split, excluded or blocked rows, approval
+state, circuit status, alert-delivery status, and remote verification result
+when uploaded. Never describe a merely built queue as scheduled live.

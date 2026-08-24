@@ -41,7 +41,8 @@ Posting rules:
 
 ## Netlify Scheduler
 
-Status: deployed and active.
+Status: four-window scheduler is implemented and tested; email delivery requires
+the Netlify Forms notification hook described below.
 
 Current state:
 - Netlify site: `magellan-travel-gifts`.
@@ -49,19 +50,30 @@ Current state:
 - Scheduler function: `netlify/functions/instagram-scheduler.mjs`.
 - Queue admin function: `netlify/functions/instagram-queue.mjs`.
 - Queue storage: Netlify Blobs store `magellan-instagram`, key `monthly-queue`.
-- Schedule: hourly.
+- Posting targets: 09:30, 12:30, 15:30, and 18:30 America/Los_Angeles.
+- Scheduler execution windows: 09:25, 12:25, 15:25, and 18:25 Pacific for
+  August/September, using UTC cron `25 1,16,19,22 * * *`.
 
 How it works:
 - Approved queues are uploaded to the protected queue endpoint.
-- Netlify Scheduled Function checks hourly for due posts.
+- The scheduler makes exactly four scheduled-function requests per day and may
+  select one post due within the next five minutes.
 - It publishes only due, approved, not-yet-published posts.
 - It writes posted media IDs, timestamps, failures, and history back to Netlify Blobs.
+- It retries one recoverable publishing failure inside the same invocation,
+  stops after two failed attempts, sends ambiguous publishes to manual review,
+  and opens a circuit breaker after three consecutive failed jobs.
+- Alerts are retained in Netlify Blobs and sent to
+  `MAGELLAN_IG_ALERT_WEBHOOK_URL` when configured.
+- Final failures submit the detected Netlify form
+  `instagram-scheduler-failure`; add a form-submission email notification in
+  Netlify before describing email alerting as active.
 - Instagram does not natively schedule these posts; Netlify is the scheduler.
 
-Current test queue:
-- 3 approved posts uploaded.
-- 2 already published.
-- 1 scheduled for 2026-05-23 14:55 PDT to verify the 15:00 hourly scheduler run.
+Current remote queue as checked 2026-08-23:
+- 2 posts total.
+- 2 published.
+- No current failed or duplicate-media items.
 
 Monthly workflow:
 - Generate and approve one monthly queue before upload.
@@ -78,7 +90,8 @@ node .agents/skills/magellan-etsy-instagram/scripts/prepare_instagram_posts.mjs 
 
 node .agents/skills/magellan-etsy-instagram/scripts/schedule_instagram_posts.mjs \
   --queue outputs/instagram/YYYY-MM/instagram-posts.json \
-  --times 09:30,14:00,18:30 \
+  --times 09:30,12:30,15:30,18:30 \
+  --time-zone America/Los_Angeles \
   --start-date YYYY-MM-DD \
   --days 30
 
@@ -89,6 +102,14 @@ node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
 node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
   --status \
   --remote
+
+node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
+  --health \
+  --remote
+
+node .agents/skills/magellan-etsy-instagram/scripts/netlify_blob_queue.mjs \
+  --alerts \
+  --remote
 ```
 
 Required local/Netlify secrets:
@@ -97,6 +118,9 @@ Required local/Netlify secrets:
 - `META_FACEBOOK_PAGE_ID`
 - `META_APP_ID`
 - `MAGELLAN_QUEUE_ADMIN_TOKEN`
+- `MAGELLAN_IG_SCHEDULER_ENABLED`
+- `MAGELLAN_IG_ALERT_WEBHOOK_URL`
+- `MAGELLAN_IG_ALERT_WEBHOOK_BEARER_TOKEN` (optional)
 
 ## Hosting And Domain Context
 
