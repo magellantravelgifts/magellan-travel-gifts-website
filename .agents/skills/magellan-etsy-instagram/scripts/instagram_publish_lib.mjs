@@ -42,7 +42,11 @@ export function imageUrlFor(item) {
 export function isDue(item, now = new Date()) {
   const status = item.instagram_status || "queued";
   if (status === "published") return false;
-  if (status === "failed" || status === "blocked") return false;
+  if (status === "failed" || status === "blocked" || status === "manual_review") return false;
+  if (item.instagram_next_retry_at) {
+    const retryAt = new Date(item.instagram_next_retry_at).getTime();
+    if (Number.isFinite(retryAt) && retryAt > now.getTime()) return false;
+  }
   if (status === "publishing") {
     const lockedAt = new Date(item.instagram_publish_lock_at || 0).getTime();
     const stale = Number.isFinite(lockedAt) && now.getTime() - lockedAt > 2 * 60 * 60 * 1000;

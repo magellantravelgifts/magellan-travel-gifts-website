@@ -4,6 +4,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
 const HISTORY_KEY = "post-history";
+const ALERTS_KEY = "scheduler-alerts";
+const CIRCUIT_KEY = "scheduler-circuit";
 const ADMIN_TOKEN_SHA256 = "100f3eb427999df69ae3181eb5ad9d79a74ec6fb8774d0e6afc2704fb87d45ac";
 
 function env(name) {
@@ -50,11 +52,39 @@ export default async (req) => {
     if (url.searchParams.get("history") === "1") {
       return jsonResponse(await readJSON(store, HISTORY_KEY, { posts: [] }));
     }
+    if (url.searchParams.get("alerts") === "1") {
+      return jsonResponse(await readJSON(store, ALERTS_KEY, { alerts: [] }));
+    }
+    if (url.searchParams.get("health") === "1") {
+      const [queue, alerts, circuit] = await Promise.all([
+        readJSON(store, QUEUE_KEY, []),
+        readJSON(store, ALERTS_KEY, { alerts: [] }),
+        readJSON(store, CIRCUIT_KEY, { status: "closed", consecutive_failures: 0 })
+      ]);
+      return jsonResponse({
+        ok: circuit.status !== "open",
+        circuit,
+        total: queue.length,
+        counts: queueCounts(queue),
+        latest_alert: alerts.alerts?.[0] || null
+      });
+    }
     const queue = await readJSON(store, QUEUE_KEY, []);
     return jsonResponse({ ok: true, total: queue.length, counts: queueCounts(queue), queue });
   }
 
   if (req.method === "POST" || req.method === "PUT") {
+    const url = new URL(req.url);
+    if (req.method === "POST" && url.searchParams.get("circuit") === "reset") {
+      const circuit = {
+        status: "closed",
+        consecutive_failures: 0,
+        reset_at: new Date().toISOString(),
+        reset_source: "admin-api"
+      };
+      await store.setJSON(CIRCUIT_KEY, circuit);
+      return jsonResponse({ ok: true, circuit });
+    }
     const queue = await req.json();
     if (!Array.isArray(queue)) {
       return jsonResponse({ ok: false, error: "Expected a JSON array queue" }, 400);
