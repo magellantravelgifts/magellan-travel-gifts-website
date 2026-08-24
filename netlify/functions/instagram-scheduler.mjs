@@ -367,9 +367,7 @@ export default async () => {
   const store = getStore(STORE_NAME, { consistency: "strong" });
   const now = new Date();
 
-  // One-off approved Euro Summer test for 2026-08-23 at 19:00/19:05 PDT.
-  // Restore the fail-closed default immediately after verifying this batch.
-  if (String(env("MAGELLAN_IG_SCHEDULER_ENABLED") || "true").toLowerCase() !== "true") {
+  if (String(env("MAGELLAN_IG_SCHEDULER_ENABLED") || "false").toLowerCase() !== "true") {
     return jsonResponse({ ok: true, action: "disabled", checkedAt: now.toISOString() });
   }
 
@@ -488,7 +486,7 @@ export default async () => {
 };
 
 export const config = {
-  // One-off approved test: 19:00 and 19:05 PDT on 2026-08-23 are
-  // 02:00 and 02:05 UTC on 2026-08-24.
-  schedule: "0,5 2 24 8 *"
+  // 01:30, 16:30, 19:30, and 22:30 UTC. During Aug/Sep PDT these are
+  // 18:30 (previous UTC day), 09:30, 12:30, and 15:30 America/Los_Angeles.
+  schedule: "30 1,16,19,22 * * *"
 };
