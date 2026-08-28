@@ -488,7 +488,10 @@ export default async (req) => {
     console.error(JSON.stringify({ instagram_scheduler_run_status_error: error.message }));
   }
 
-  if (String(env("MAGELLAN_IG_SCHEDULER_ENABLED") || "false").toLowerCase() !== "true") {
+  // Queue uploads happen only after an explicit batch approval. Keep the
+  // scheduler active by default so an approved remote queue does not require a
+  // separate account-level environment-variable change before it can run.
+  if (String(env("MAGELLAN_IG_SCHEDULER_ENABLED") || "true").toLowerCase() !== "true") {
     return finishRun(store, run, { ok: true, action: "disabled", checkedAt: now.toISOString() });
   }
 
