@@ -41,8 +41,8 @@ Posting rules:
 
 ## Netlify Scheduler
 
-Status: four-window scheduler is implemented and tested; email delivery requires
-the Netlify Forms notification hook described below.
+Status: four primary windows plus one final recovery window are implemented.
+Final failures submit the Netlify form notification described below.
 
 Current state:
 - Netlify site: `magellan-travel-gifts`.
@@ -53,11 +53,13 @@ Current state:
 - Posting targets: 09:30, 12:30, 15:30, and 18:30 America/Los_Angeles.
 - Scheduler execution windows: 09:25, 12:25, 15:25, and 18:25 Pacific for
   August/September, using UTC cron `25 1,16,19,22 * * *`.
+- Final recovery window: 18:40 Pacific for August/September, using UTC cron
+  `40 1 * * *`.
 
 How it works:
 - Approved queues are uploaded to the protected queue endpoint.
-- The scheduler makes exactly four scheduled-function requests per day and may
-  select one post due within the next five minutes.
+- The scheduler makes four primary scheduled-function requests plus one final
+  recovery request per day and may select one post due within the next five minutes.
 - It publishes only due, approved, not-yet-published posts.
 - It writes posted media IDs, timestamps, failures, and history back to Netlify Blobs.
 - It retries one recoverable publishing failure inside the same invocation,
@@ -66,8 +68,8 @@ How it works:
 - Alerts are retained in Netlify Blobs and sent to
   `MAGELLAN_IG_ALERT_WEBHOOK_URL` when configured.
 - Final failures submit the detected Netlify form
-  `instagram-scheduler-failure`; add a form-submission email notification in
-  Netlify before describing email alerting as active.
+  `instagram-scheduler-failure`. A blocked final recovery run waits 20 seconds,
+  then submits the same failure form if overdue work still remains.
 - Instagram does not natively schedule these posts; Netlify is the scheduler.
 
 Current remote queue as checked 2026-08-23:

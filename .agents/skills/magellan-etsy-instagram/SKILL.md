@@ -32,7 +32,11 @@ updated in a reviewed production deployment.
 The separate `18:40` Pacific recovery invocation is the fifth and final daily
 request. It processes only overdue or recoverable work left by the `18:25`
 invocation; otherwise it exits immediately. This prevents a transient function
-timeout or lock collision from delaying the post until the next morning.
+timeout or lock collision from delaying the post until the next morning. If
+that final recovery invocation is still blocked by an active run, it observes
+the queue for 20 seconds. It submits the failure form only when overdue work
+still remains after that observation period, avoiding both silent misses and
+duplicate-invocation false alarms.
 
 Keep secrets in the project `.env` and never commit it:
 

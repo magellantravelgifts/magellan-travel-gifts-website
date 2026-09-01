@@ -7,6 +7,7 @@ import {
   config,
   failureFormBody,
   isDueWithinLead,
+  queueHasOverdueWork,
   queueNeedsWork,
   recoverStaleItems,
   statusCounts
@@ -60,6 +61,21 @@ test("five-minute lead makes the next target actionable without waking later tar
     instagram_status: "scheduled",
     instagram_scheduled_publish_time: "2026-08-25T12:30:00-07:00"
   }, now), false);
+});
+
+test("recovery alerting distinguishes overdue work from future work", () => {
+  const now = new Date("2026-08-25T16:40:00Z");
+  assert.equal(queueHasOverdueWork([{
+    instagram_status: "scheduled",
+    instagram_scheduled_publish_time: "2026-08-25T09:30:00-07:00"
+  }], now), true);
+  assert.equal(queueHasOverdueWork([{
+    instagram_status: "scheduled",
+    instagram_scheduled_publish_time: "2026-08-25T12:30:00-07:00"
+  }], now), false);
+  assert.equal(queueHasOverdueWork([{
+    instagram_status: "container_created"
+  }], now), true);
 });
 
 test("item failures stop after two attempts and ambiguous publishes require review", () => {

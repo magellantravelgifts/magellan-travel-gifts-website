@@ -30,6 +30,7 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 const MAX_ALERTS = 100;
 const MAX_RUN_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 500;
+const RECOVERY_LOCK_OBSERVATION_MS = 20 * 1000;
 
 const RECOVERABLE_STATUSES = new Set([
   "publishing",
@@ -93,6 +94,10 @@ function stale(timestamp, now, maxAgeMs = STALE_WORK_MS) {
 
 export function queueNeedsWork(queue, now = new Date()) {
   return queue.some((item) => IN_PROGRESS_STATUSES.has(item.instagram_status) || isDueWithinLead(item, now));
+}
+
+export function queueHasOverdueWork(queue, now = new Date()) {
+  return queue.some((item) => IN_PROGRESS_STATUSES.has(item.instagram_status) || isDue(item, now));
 }
 
 function alertText(alert) {
@@ -475,7 +480,7 @@ async function finishRun(store, run, body, status = 200) {
   return jsonResponse(body, status);
 }
 
-export default async (req) => {
+export async function runInstagramScheduler(req, { window = "primary" } = {}) {
   const store = getStore(STORE_NAME, { consistency: "strong" });
   const now = new Date();
   const scheduledPayload = await req?.json?.().catch(() => ({})) || {};
@@ -483,7 +488,8 @@ export default async (req) => {
     started_at: now.toISOString(),
     next_run: scheduledPayload.next_run || null,
     schedule_lead_minutes: SCHEDULE_LEAD_MS / 60000,
-    max_attempts: MAX_RUN_ATTEMPTS
+    max_attempts: MAX_RUN_ATTEMPTS,
+    window
   };
   try {
     await store.setJSON(RUN_STATUS_KEY, { ...run, action: "started" });
@@ -553,6 +559,37 @@ export default async (req) => {
 
   const lock = await acquireRunLock(store, now);
   if (!lock) {
+    if (window === "recovery" && queueHasOverdueWork(queue, now)) {
+      // A second Netlify invocation can overlap the active publisher. Give it
+      // enough time to finish, then alert only if overdue work still remains.
+      await delay(RECOVERY_LOCK_OBSERVATION_MS);
+      const latestQueue = await readJSON(store, QUEUE_KEY, []);
+      if (Array.isArray(latestQueue) && queueHasOverdueWork(latestQueue, new Date())) {
+        const overdueItem = nextItem(latestQueue, new Date());
+        const message = "The final recovery run could not acquire the scheduler lock and overdue Instagram work remains.";
+        await recordAlert(store, {
+          severity: "error",
+          event: "recovery_run_blocked",
+          message,
+          item_id: overdueItem?.id,
+          status: overdueItem?.instagram_status
+        }, { email: true });
+        return finishRun(store, run, {
+          ok: false,
+          action: "recovery_blocked",
+          error: message,
+          item: overdueItem?.id || null,
+          statuses: statusCounts(latestQueue),
+          checkedAt: new Date().toISOString()
+        }, 503);
+      }
+      return finishRun(store, run, {
+        ok: true,
+        action: "recovered_by_active_run",
+        statuses: statusCounts(latestQueue),
+        checkedAt: new Date().toISOString()
+      });
+    }
     return finishRun(store, run, { ok: true, action: "skipped", reason: "Scheduler run already active", checkedAt: now.toISOString() });
   }
 
@@ -621,7 +658,9 @@ export default async (req) => {
   } finally {
     await releaseRunLock(store, lock);
   }
-};
+}
+
+export default runInstagramScheduler;
 
 export const config = {
   // Run five minutes before the 09:30, 12:30, 15:30, and 18:30 Pacific
