@@ -15,18 +15,21 @@ const CIRCUIT_KEY = "scheduler-circuit";
 const RUN_LOCK_KEY = "scheduler-run-lock";
 const RUN_STATUS_KEY = "scheduler-run-status";
 
-const STALE_WORK_MS = 45 * 60 * 1000;
+// Scheduled functions have a 30-second ceiling. Keep every Meta request short
+// enough for the guarded retry and let the 18:40 Pacific recovery run reclaim
+// work left by a terminated 18:25 invocation.
+const STALE_WORK_MS = 10 * 60 * 1000;
 const SCHEDULE_LEAD_MS = 5 * 60 * 1000;
-const META_REQUEST_TIMEOUT_MS = 5000;
+const META_REQUEST_TIMEOUT_MS = 3000;
 const ALERT_REQUEST_TIMEOUT_MS = 2000;
 const ALERT_EMAIL_TIMEOUT_MS = 3000;
 const CONTAINER_CHECK_ATTEMPTS = 2;
-const CONTAINER_CHECK_DELAY_MS = 1500;
+const CONTAINER_CHECK_DELAY_MS = 750;
 const MAX_ITEM_FAILURES = 2;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const MAX_ALERTS = 100;
 const MAX_RUN_ATTEMPTS = 2;
-const RETRY_DELAY_MS = 750;
+const RETRY_DELAY_MS = 500;
 
 const RECOVERABLE_STATUSES = new Set([
   "publishing",

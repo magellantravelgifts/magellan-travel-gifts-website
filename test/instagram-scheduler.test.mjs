@@ -11,14 +11,16 @@ import {
   recoverStaleItems,
   statusCounts
 } from "../netlify/functions/instagram-scheduler.mjs";
+import { config as recoveryConfig } from "../netlify/functions/instagram-scheduler-recovery.mjs";
 import {
   parseDateParts,
   parseTimeParts,
   zonedIso
 } from "../.agents/skills/magellan-etsy-instagram/scripts/schedule_instagram_posts.mjs";
 
-test("scheduler uses four fixed daily windows", () => {
+test("scheduler uses four primary windows and one recovery window", () => {
   assert.equal(config.schedule, "25 1,16,19,22 * * *");
+  assert.equal(recoveryConfig.schedule, "40 1 * * *");
 });
 
 test("Pacific schedule timestamps preserve the intended local time and DST offset", () => {
@@ -104,6 +106,19 @@ test("stale work has a hard recovery ceiling", () => {
   }];
   assert.deepEqual(recoverStaleItems(queue, now), { recovered: [], failed: ["post-1"] });
   assert.equal(queue[0].instagram_status, "failed");
+});
+
+test("the recovery window reclaims work older than ten minutes", () => {
+  const now = new Date("2026-08-26T01:40:00Z");
+  const queue = [{
+    id: "post-1",
+    instagram_status: "container_checking",
+    instagram_work_started_at: "2026-08-26T01:25:00Z",
+    instagram_recovery_count: 0,
+    instagram_container_id: "container-1"
+  }];
+  assert.deepEqual(recoverStaleItems(queue, now), { recovered: ["post-1"], failed: [] });
+  assert.equal(queue[0].instagram_status, "container_created");
 });
 
 test("status counts include manual review and failed items", () => {
