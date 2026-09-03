@@ -61,6 +61,8 @@ How it works:
 - The scheduler makes four primary scheduled-function requests plus one final
   recovery request per day and may select one post due within the next five minutes.
 - It publishes only due, approved, not-yet-published posts.
+- It skips the expensive recent-feed lookup for normal queued posts and uses
+  that duplicate guard only after an ambiguous publish response.
 - It writes posted media IDs, timestamps, failures, and history back to Netlify Blobs.
 - It retries one recoverable publishing failure inside the same invocation,
   stops after two failed attempts, sends ambiguous publishes to manual review,

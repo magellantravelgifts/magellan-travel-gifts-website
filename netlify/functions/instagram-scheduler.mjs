@@ -20,7 +20,7 @@ const RUN_STATUS_KEY = "scheduler-run-status";
 // work left by a terminated 18:25 invocation.
 const STALE_WORK_MS = 10 * 60 * 1000;
 const SCHEDULE_LEAD_MS = 5 * 60 * 1000;
-const META_REQUEST_TIMEOUT_MS = 3000;
+const META_REQUEST_TIMEOUT_MS = 8000;
 const ALERT_REQUEST_TIMEOUT_MS = 2000;
 const ALERT_EMAIL_TIMEOUT_MS = 3000;
 const CONTAINER_CHECK_ATTEMPTS = 2;
@@ -323,9 +323,6 @@ async function markDuplicatePublished(store, queue, item, duplicate, now) {
 }
 
 async function publishStep(store, queue, item, token, igUserId, now) {
-  const duplicate = await findRecentInstagramDuplicate(item, { token, igUserId, limit: 50 });
-  if (duplicate) return markDuplicatePublished(store, queue, item, duplicate, now);
-
   item.instagram_status = "publish_requested";
   item.instagram_publish_requested_at = now.toISOString();
   await store.setJSON(QUEUE_KEY, queue);

@@ -66,6 +66,9 @@ therefore requires explicit user approval.
 - The scheduler makes at most five scheduled runs per day: four primary checks
   and one final recovery check.
 - A run processes at most one post and uses bounded Meta request timeouts.
+- Normal queued posts do not perform a preliminary Instagram-feed scan. The
+  duplicate lookup is reserved for an ambiguous `publish_requested` state,
+  reducing Meta calls and preserving the scheduler's execution budget.
 - A recoverable failure gets exactly one guarded retry inside the same scheduled
   invocation, so normal usage remains four job requests per day. A post stops
   after two failed attempts. Ambiguous publish responses go directly to
