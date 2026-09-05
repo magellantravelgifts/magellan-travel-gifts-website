@@ -14,22 +14,22 @@ Build a complete static-feed automation in one invocation, but never upload or p
 - Facebook Page ID: `104486471856540`
 - Netlify Blob store: `magellan-instagram`
 - Queue key: `monthly-queue`
-- Scheduled Function cadence: four fixed publishing windows plus one recovery window
-- Default posting windows: `09:30`, `12:30`, `15:30`, and `18:30` in `America/Los_Angeles`
-- Netlify execution windows for August and September (PDT): `09:25`, `12:25`, `15:25`, and `18:25` Pacific
+- Scheduled Function cadence: one prepare run, one publish run, and one recovery run
+- Default posting time: `18:30` in `America/Los_Angeles`
+- Netlify execution windows for August and September (PDT): `18:15` prepare and `18:25` publish
 - Netlify recovery window for August and September (PDT): `18:40` Pacific
-- Netlify UTC cron for August and September (PDT): `25 1,16,19,22 * * *`
+- Netlify UTC prepare cron for August and September (PDT): `15 1 * * *`
+- Netlify UTC publish cron for August and September (PDT): `25 1 * * *`
 - Netlify UTC recovery cron for August and September (PDT): `40 1 * * *`
 
-The cron runs at 01:25, 16:25, 19:25, and 22:25 UTC. In August and September
-these correspond to 18:25 on the prior UTC date, then 09:25, 12:25, and 15:25
-Pacific. Each run may select one post scheduled within the next five minutes,
-so the public posting targets remain 09:30, 12:30, 15:30, and 18:30 while
-absorbing normal platform invocation delay. Netlify cron is UTC-only; after the daylight-saving transition these
-windows occur one hour earlier in Pacific time unless the cron is deliberately
-updated in a reviewed production deployment.
+The prepare run creates the Instagram media container at 18:15 Pacific. The
+publish run checks and publishes it at 18:25, targeting the approved 18:30 post
+time. Splitting the workflow keeps each invocation well below Netlify's
+30-second scheduled-function limit. Netlify cron is UTC-only; after the
+daylight-saving transition these windows occur one hour earlier in Pacific time
+unless the cron is deliberately updated in a reviewed production deployment.
 
-The separate `18:40` Pacific recovery invocation is the fifth and final daily
+The separate `18:40` Pacific recovery invocation is the third and final daily
 request. It processes only overdue or recoverable work left by the `18:25`
 invocation; otherwise it exits immediately. This prevents a transient function
 timeout or lock collision from delaying the post until the next morning. If
@@ -59,18 +59,15 @@ therefore requires explicit user approval.
 
 ## Predictable scheduling and cost controls
 
-- Use one to four fixed daily times; never randomize posting times.
-- Default to the four Pacific windows above. Use fewer windows only when the
-  user requests a lower cadence.
-- Schedule at most one post in each window.
-- The scheduler makes at most five scheduled runs per day: four primary checks
-  and one final recovery check.
+- Use fixed daily times; never randomize posting times.
+- Schedule at most one post per day at the approved 18:30 Pacific target.
+- The scheduler makes three scheduled runs per day: prepare, publish, and final recovery.
 - A run processes at most one post and uses bounded Meta request timeouts.
 - Normal queued posts do not perform a preliminary Instagram-feed scan. The
   duplicate lookup is reserved for an ambiguous `publish_requested` state,
   reducing Meta calls and preserving the scheduler's execution budget.
 - A recoverable failure gets exactly one guarded retry inside the same scheduled
-  invocation, so normal usage remains four job requests per day. A post stops
+  invocation. A post stops
   after two failed attempts. Ambiguous publish responses go directly to
   `manual_review` so the scheduler cannot create a duplicate post.
 - Three consecutive scheduler failures open the circuit breaker. An open

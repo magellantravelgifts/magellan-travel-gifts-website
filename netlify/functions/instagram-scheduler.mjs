@@ -20,6 +20,7 @@ const RUN_STATUS_KEY = "scheduler-run-status";
 // work left by a terminated 18:25 invocation.
 const STALE_WORK_MS = 10 * 60 * 1000;
 const SCHEDULE_LEAD_MS = 5 * 60 * 1000;
+export const PREPARE_LEAD_MS = 15 * 60 * 1000;
 const META_REQUEST_TIMEOUT_MS = 8000;
 const ALERT_REQUEST_TIMEOUT_MS = 2000;
 const ALERT_EMAIL_TIMEOUT_MS = 3000;
@@ -172,7 +173,18 @@ async function deliverAlertEmail(alert) {
   }
 }
 
-async function recordAlert(store, details, { email = false } = {}) {
+async function recordAlert(store, details, { email = false, dedupeMs = 0 } = {}) {
+  const current = await readJSON(store, ALERTS_KEY, { alerts: [] });
+  const alerts = Array.isArray(current.alerts) ? current.alerts : [];
+  if (dedupeMs > 0) {
+    const duplicate = alerts.find((candidate) =>
+      candidate.event === (details.event || "scheduler_failure")
+      && candidate.item_id === (details.item_id || null)
+      && Date.now() - new Date(candidate.created_at || 0).getTime() < dedupeMs
+    );
+    if (duplicate) return duplicate;
+  }
+
   const alert = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     created_at: new Date().toISOString(),
@@ -184,8 +196,6 @@ async function recordAlert(store, details, { email = false } = {}) {
     failure_count: details.failure_count ?? null,
     circuit_status: details.circuit_status || null
   };
-  const current = await readJSON(store, ALERTS_KEY, { alerts: [] });
-  const alerts = Array.isArray(current.alerts) ? current.alerts : [];
   alert.delivery = {
     webhook: { status: "pending" },
     email: { status: email ? "pending" : "not_requested" }
@@ -303,11 +313,11 @@ async function releaseRunLock(store, lock) {
   }
 }
 
-function nextItem(queue, now) {
+function nextItem(queue, now, leadMs = SCHEDULE_LEAD_MS) {
   return queue.find((item) => item.instagram_status === "publish_requested")
     || queue.find((item) => item.instagram_status === "ready_to_publish")
     || queue.find((item) => item.instagram_status === "container_created")
-    || queue.find((item) => isDueWithinLead(item, now));
+    || queue.find((item) => isDueWithinLead(item, now, leadMs));
 }
 
 async function markDuplicatePublished(store, queue, item, duplicate, now) {
@@ -341,7 +351,6 @@ async function checkContainerUntilReady(store, queue, item, token) {
   for (let attempt = 1; attempt <= CONTAINER_CHECK_ATTEMPTS; attempt += 1) {
     item.instagram_status = "container_checking";
     item.instagram_work_started_at = new Date().toISOString();
-    await store.setJSON(QUEUE_KEY, queue);
 
     const status = await getInstagramContainerStatus(item.instagram_container_id, {
       token,
@@ -371,7 +380,7 @@ async function checkContainerUntilReady(store, queue, item, token) {
   return false;
 }
 
-async function processItem(store, queue, item, token, igUserId, now) {
+async function processItem(store, queue, item, token, igUserId, now, { createOnly = false } = {}) {
   if (item.instagram_status === "publish_requested") {
     const duplicate = await findRecentInstagramDuplicate(item, { token, igUserId, limit: 50 });
     if (duplicate) return markDuplicatePublished(store, queue, item, duplicate, now);
@@ -389,7 +398,6 @@ async function processItem(store, queue, item, token, igUserId, now) {
     item.instagram_status = "container_creating";
     item.instagram_work_started_at = now.toISOString();
     delete item.instagram_error;
-    await store.setJSON(QUEUE_KEY, queue);
     await createInstagramContainer(item, {
       token,
       igUserId,
@@ -397,6 +405,7 @@ async function processItem(store, queue, item, token, igUserId, now) {
     });
     delete item.instagram_work_started_at;
     await store.setJSON(QUEUE_KEY, queue);
+    if (createOnly) return { action: "container_created", id: item.id };
   }
 
   const ready = await checkContainerUntilReady(store, queue, item, token);
@@ -410,9 +419,9 @@ export function canRetryItem(item, error) {
   return true;
 }
 
-async function processItemWithOneRetry(store, queue, item, token, igUserId, now) {
+async function processItemWithOneRetry(store, queue, item, token, igUserId, now, options = {}) {
   try {
-    const result = await processItem(store, queue, item, token, igUserId, now);
+    const result = await processItem(store, queue, item, token, igUserId, now, options);
     return { ...result, attempts: 1, retried: false };
   } catch (firstError) {
     if (!canRetryItem(item, firstError)) {
@@ -427,7 +436,7 @@ async function processItemWithOneRetry(store, queue, item, token, igUserId, now)
     await delay(RETRY_DELAY_MS);
 
     try {
-      const result = await processItem(store, queue, item, token, igUserId, new Date());
+      const result = await processItem(store, queue, item, token, igUserId, new Date(), options);
       item.instagram_retry_succeeded_at = new Date().toISOString();
       delete item.instagram_retry_reason;
       await store.setJSON(QUEUE_KEY, queue);
@@ -477,14 +486,18 @@ async function finishRun(store, run, body, status = 200) {
   return jsonResponse(body, status);
 }
 
-export async function runInstagramScheduler(req, { window = "primary" } = {}) {
+export async function runInstagramScheduler(req, {
+  window = "publish",
+  leadMs = SCHEDULE_LEAD_MS,
+  createOnly = false
+} = {}) {
   const store = getStore(STORE_NAME, { consistency: "strong" });
   const now = new Date();
   const scheduledPayload = await req?.json?.().catch(() => ({})) || {};
   const run = {
     started_at: now.toISOString(),
     next_run: scheduledPayload.next_run || null,
-    schedule_lead_minutes: SCHEDULE_LEAD_MS / 60000,
+    schedule_lead_minutes: leadMs / 60000,
     max_attempts: MAX_RUN_ATTEMPTS,
     window
   };
@@ -550,7 +563,10 @@ export async function runInstagramScheduler(req, { window = "primary" } = {}) {
     }, { email: recovery.failed.length > 0 });
   }
 
-  if (!queueNeedsWork(queue, now)) {
+  const needsWork = queue.some((item) =>
+    IN_PROGRESS_STATUSES.has(item.instagram_status) || isDueWithinLead(item, now, leadMs)
+  );
+  if (!needsWork) {
     return finishRun(store, run, { ok: true, action: "idle", statuses: statusCounts(queue), checkedAt: now.toISOString() });
   }
 
@@ -562,7 +578,7 @@ export async function runInstagramScheduler(req, { window = "primary" } = {}) {
       await delay(RECOVERY_LOCK_OBSERVATION_MS);
       const latestQueue = await readJSON(store, QUEUE_KEY, []);
       if (Array.isArray(latestQueue) && queueHasOverdueWork(latestQueue, new Date())) {
-        const overdueItem = nextItem(latestQueue, new Date());
+        const overdueItem = nextItem(latestQueue, new Date(), leadMs);
         const message = "The final recovery run could not acquire the scheduler lock and overdue Instagram work remains.";
         await recordAlert(store, {
           severity: "error",
@@ -570,7 +586,7 @@ export async function runInstagramScheduler(req, { window = "primary" } = {}) {
           message,
           item_id: overdueItem?.id,
           status: overdueItem?.instagram_status
-        }, { email: true });
+        }, { email: true, dedupeMs: 30 * 60 * 1000 });
         return finishRun(store, run, {
           ok: false,
           action: "recovery_blocked",
@@ -578,7 +594,7 @@ export async function runInstagramScheduler(req, { window = "primary" } = {}) {
           item: overdueItem?.id || null,
           statuses: statusCounts(latestQueue),
           checkedAt: new Date().toISOString()
-        }, 503);
+        });
       }
       return finishRun(store, run, {
         ok: true,
@@ -592,12 +608,20 @@ export async function runInstagramScheduler(req, { window = "primary" } = {}) {
 
   let item = null;
   try {
-    item = nextItem(queue, now);
+    item = nextItem(queue, now, leadMs);
     if (!item) {
       return finishRun(store, run, { ok: true, action: "idle", statuses: statusCounts(queue), checkedAt: now.toISOString() });
     }
 
-    const result = await processItemWithOneRetry(store, queue, item, token, igUserId, now);
+    const result = await processItemWithOneRetry(
+      store,
+      queue,
+      item,
+      token,
+      igUserId,
+      now,
+      { createOnly }
+    );
     if (result.action === "container_pending") {
       await recordAlert(store, {
         severity: "warning",
@@ -657,11 +681,13 @@ export async function runInstagramScheduler(req, { window = "primary" } = {}) {
   }
 }
 
-export default runInstagramScheduler;
+export default (req) => runInstagramScheduler(req, {
+  window: "prepare",
+  leadMs: PREPARE_LEAD_MS,
+  createOnly: true
+});
 
 export const config = {
-  // Run five minutes before the 09:30, 12:30, 15:30, and 18:30 Pacific
-  // publishing targets. During Aug/Sep PDT these are 16:25, 19:25, 22:25,
-  // and 01:25 UTC (the last on the following UTC date).
-  schedule: "25 1,16,19,22 * * *"
+  // Prepare the 18:30 Pacific post at 18:15 during Aug/Sep PDT.
+  schedule: "15 1 * * *"
 };

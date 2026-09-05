@@ -41,7 +41,7 @@ Posting rules:
 
 ## Netlify Scheduler
 
-Status: four primary windows plus one final recovery window are implemented.
+Status: separate prepare, publish, and final recovery windows are implemented.
 Final failures submit the Netlify form notification described below.
 
 Current state:
@@ -50,16 +50,16 @@ Current state:
 - Scheduler function: `netlify/functions/instagram-scheduler.mjs`.
 - Queue admin function: `netlify/functions/instagram-queue.mjs`.
 - Queue storage: Netlify Blobs store `magellan-instagram`, key `monthly-queue`.
-- Posting targets: 09:30, 12:30, 15:30, and 18:30 America/Los_Angeles.
-- Scheduler execution windows: 09:25, 12:25, 15:25, and 18:25 Pacific for
-  August/September, using UTC cron `25 1,16,19,22 * * *`.
+- Posting target: 18:30 America/Los_Angeles.
+- Prepare window: 18:15 Pacific for August/September, using UTC cron `15 1 * * *`.
+- Publish window: 18:25 Pacific for August/September, using UTC cron `25 1 * * *`.
 - Final recovery window: 18:40 Pacific for August/September, using UTC cron
   `40 1 * * *`.
 
 How it works:
 - Approved queues are uploaded to the protected queue endpoint.
-- The scheduler makes four primary scheduled-function requests plus one final
-  recovery request per day and may select one post due within the next five minutes.
+- The scheduler makes three requests per day: container preparation, publication,
+  and final recovery.
 - It publishes only due, approved, not-yet-published posts.
 - It skips the expensive recent-feed lookup for normal queued posts and uses
   that duplicate guard only after an ambiguous publish response.

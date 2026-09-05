@@ -12,6 +12,7 @@ import {
   recoverStaleItems,
   statusCounts
 } from "../netlify/functions/instagram-scheduler.mjs";
+import { config as publishConfig } from "../netlify/functions/instagram-scheduler-publish.mjs";
 import { config as recoveryConfig } from "../netlify/functions/instagram-scheduler-recovery.mjs";
 import {
   parseDateParts,
@@ -19,8 +20,9 @@ import {
   zonedIso
 } from "../.agents/skills/magellan-etsy-instagram/scripts/schedule_instagram_posts.mjs";
 
-test("scheduler uses four primary windows and one recovery window", () => {
-  assert.equal(config.schedule, "25 1,16,19,22 * * *");
+test("scheduler uses separate prepare, publish, and recovery windows", () => {
+  assert.equal(config.schedule, "15 1 * * *");
+  assert.equal(publishConfig.schedule, "25 1 * * *");
   assert.equal(recoveryConfig.schedule, "40 1 * * *");
 });
 
