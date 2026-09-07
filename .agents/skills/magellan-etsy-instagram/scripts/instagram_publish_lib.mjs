@@ -106,7 +106,7 @@ async function graphGet(endpoint, params, token, options = {}) {
   return json;
 }
 
-export async function findRecentInstagramDuplicate(item, { token, igUserId, limit = 50 }) {
+export async function findRecentInstagramDuplicate(item, { token, igUserId, limit = 50, requestTimeoutMs = 10000 }) {
   if (!token) throw new Error("Missing META_PAGE_ACCESS_TOKEN");
   if (!igUserId) throw new Error("Missing META_INSTAGRAM_BUSINESS_ID");
   const targetKey = captionBodyKey(captionFor(item));
@@ -114,7 +114,8 @@ export async function findRecentInstagramDuplicate(item, { token, igUserId, limi
   const response = await graphGet(
     `${igUserId}/media`,
     { fields: "id,caption,timestamp,permalink", limit: String(limit) },
-    token
+    token,
+    { requestTimeoutMs }
   );
   const posts = response.data || [];
   return posts.find((post) => captionBodyKey(post.caption || "") === targetKey) || null;

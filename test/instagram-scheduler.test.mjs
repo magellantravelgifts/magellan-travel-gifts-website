@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 import {
   applyItemFailure,
   canRetryItem,
+  campaignQueue,
+  nextItem,
+  runInstagramScheduler,
   config,
   failureFormBody,
   isDueWithinLead,
@@ -14,6 +17,8 @@ import {
 } from "../netlify/functions/instagram-scheduler.mjs";
 import { config as publishConfig } from "../netlify/functions/instagram-scheduler-publish.mjs";
 import { config as recoveryConfig } from "../netlify/functions/instagram-scheduler-recovery.mjs";
+import { config as studyPrepare } from "../netlify/functions/instagram-study-abroad-prepare.mts";
+import { config as studyPublish } from "../netlify/functions/instagram-study-abroad-publish.mts";
 import {
   parseDateParts,
   parseTimeParts,
@@ -24,6 +29,58 @@ test("scheduler uses separate prepare, publish, and recovery windows", () => {
   assert.equal(config.schedule, "15 1 * * *");
   assert.equal(publishConfig.schedule, "25 1 * * *");
   assert.equal(recoveryConfig.schedule, "40 1 * * *");
+  assert.equal(studyPrepare.schedule, "0 1 * * *");
+  assert.equal(studyPublish.schedule, "10 1 * * *");
+  assert.equal(new Set([config.schedule,publishConfig.schedule,recoveryConfig.schedule,studyPrepare.schedule,studyPublish.schedule]).size,5);
+});
+
+test("campaign lanes preserve primary capacity even if Study Abroad is still processing", () => {
+  const primary={id:"summer",instagram_status:"scheduled",date:"2026-01-01"};
+  const study={id:"study",scheduler_lane:"study-abroad",instagram_status:"container_created"};
+  const queue=[study,primary];
+  assert.equal(nextItem(campaignQueue(queue,"primary"),new Date()).id,"summer");
+  assert.equal(nextItem(campaignQueue(queue,"study-abroad"),new Date()).id,"study");
+  assert.equal(campaignQueue(queue,"all").length,2);
+});
+
+test("both campaigns prepare and publish independently without altering other queue entries",async () => {
+  const oldFetch=globalThis.fetch;
+  const oldSiteUrl=process.env.NETLIFY_SITE_URL;
+  process.env.NETLIFY_SITE_URL="https://example.com";
+  const oldToken=process.env.META_PAGE_ACCESS_TOKEN,oldId=process.env.META_INSTAGRAM_BUSINESS_ID;
+  process.env.META_PAGE_ACCESS_TOKEN="test-only";process.env.META_INSTAGRAM_BUSINESS_ID="test-only";
+  const history={id:"history",instagram_status:"published",instagram_media_id:"old"};
+  const make=(id,lane)=>({id,scheduler_lane:lane,instagram_status:"scheduled",approval_status:"approved",instagram_ready:true,date:"2026-01-01",instagram_image_url:"https://example.com/image.jpg",instagram_caption:id});
+  const values=new Map([["monthly-queue",[history,make("summer","primary"),make("study","study-abroad")]]]);
+  const store={get:async k=>structuredClone(values.get(k)),setJSON:async(k,v)=>{values.set(k,structuredClone(v));}};
+  const calls=[];
+  globalThis.fetch=async(url,opts={})=>{calls.push(String(url));return new Response(JSON.stringify(opts.method==="POST"?{id:String(url).endsWith("/media_publish")?"media-"+calls.length:"container-"+calls.length}:{status_code:"FINISHED"}),{status:200});};
+  try{
+    const run=async o=>(await runInstagramScheduler(new Request("https://example.com"),{...o,store})).json();
+    assert.equal((await run({lane:"study-abroad",createOnly:true})).action,"container_created");
+    assert.equal((await run({lane:"study-abroad",createOnly:true})).action,"already_prepared");
+    assert(!calls.some(x=>x.endsWith("/media_publish")));
+    assert.equal((await run({lane:"primary",createOnly:true})).action,"container_created");
+    assert.equal((await run({lane:"study-abroad"})).action,"published");
+    assert.equal((await run({lane:"primary"})).action,"published");
+    assert.equal((await run({window:"recovery"})).action,"idle");
+    assert.deepEqual(values.get("monthly-queue")[0],history);
+    assert.equal(calls.filter(x=>x.endsWith("/media_publish")).length,2);
+    values.set("monthly-queue",[history,...[make("summer-recovery","primary"),make("study-recovery","study-abroad")].map(r=>({...r,instagram_status:"container_created",instagram_container_id:r.id}))]);
+    const recovered=await run({window:"recovery"});
+    assert.equal(recovered.action,"recovery_batch");
+    assert.equal(recovered.results.length,2);
+    assert(values.get("monthly-queue").every(r=>r.instagram_status==="published"));
+    values.set("monthly-queue",[history,make("failure","study-abroad")]);
+    let mediaAttempts=0,forms=0;
+    globalThis.fetch=async(url,opts={})=>{
+      if(String(url).startsWith("https://graph.facebook.com/")){mediaAttempts++;return new Response(JSON.stringify({error:{message:"temporary failure"}}),{status:503});}
+      forms++;return new Response("ok",{status:200});
+    };
+    const failed=await run({lane:"study-abroad",createOnly:true});
+    assert.equal(failed.ok,false);assert.equal(mediaAttempts,2);assert.equal(forms,1);
+    assert.equal(values.get("monthly-queue")[1].instagram_status,"failed");
+  }finally{globalThis.fetch=oldFetch;if(oldSiteUrl===undefined)delete process.env.NETLIFY_SITE_URL;else process.env.NETLIFY_SITE_URL=oldSiteUrl;if(oldToken===undefined)delete process.env.META_PAGE_ACCESS_TOKEN;else process.env.META_PAGE_ACCESS_TOKEN=oldToken;if(oldId===undefined)delete process.env.META_INSTAGRAM_BUSINESS_ID;else process.env.META_INSTAGRAM_BUSINESS_ID=oldId;}
 });
 
 test("Pacific schedule timestamps preserve the intended local time and DST offset", () => {
