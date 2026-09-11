@@ -80,6 +80,18 @@ test("both campaigns prepare and publish independently without altering other qu
     assert.equal(manual.id,"target");
     assert.equal(manual.action,"published");
     assert.equal(values.get("monthly-queue")[1].instagram_status,"scheduled");
+    const catchupToday = { ...make("catchup-today","catch-up"), instagram_scheduled_publish_time: new Date(Date.now()+29*60000).toISOString() };
+    const catchupTomorrow = { ...make("catchup-tomorrow","catch-up"), instagram_scheduled_publish_time: new Date(Date.now()+24*60*60000).toISOString() };
+    values.set("monthly-queue",[history,make("primary-prep","primary"),catchupToday,catchupTomorrow]);
+    const countBeforePrep = calls.filter(x=>x.endsWith("/media_publish")).length;
+    await run({ lane:"primary", createOnly:true });
+    assert.equal(values.get("monthly-queue")[1].instagram_status,"container_created");
+    assert.equal(values.get("monthly-queue")[2].instagram_status,"container_created");
+    assert.deepEqual(values.get("monthly-queue")[3],catchupTomorrow);
+    assert.equal(calls.filter(x=>x.endsWith("/media_publish")).length,countBeforePrep);
+    await run({ lane:"primary" });
+    assert.equal(values.get("monthly-queue")[1].instagram_status,"published");
+    assert.equal(values.get("monthly-queue")[2].instagram_status,"container_created");
     values.set("monthly-queue",[history,...[make("summer-recovery","primary"),make("study-recovery","study-abroad")].map(r=>({...r,instagram_status:"container_created",instagram_container_id:r.id}))]);
     const recovered=await run({window:"recovery"});
     assert.equal(recovered.action,"recovery_batch");

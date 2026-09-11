@@ -74,7 +74,7 @@ export default async (req) => {
         last_run: lastRun,
         lock,
         storage_consistency: "strong",
-        scheduler_version: "strong-consistency-five-windows-v2"
+        scheduler_version: "strong-consistency-catchup-v3"
       });
     }
     const queue = await readJSON(store, QUEUE_KEY, []);

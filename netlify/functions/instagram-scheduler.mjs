@@ -521,7 +521,7 @@ export async function runInstagramScheduler(req, {
     max_attempts: MAX_RUN_ATTEMPTS,
     window,
     lane,
-    scheduler_version: "strong-consistency-five-windows-v2"
+    scheduler_version: "strong-consistency-catchup-v3"
   };
   try {
     await store.setJSON(RUN_STATUS_KEY, { ...run, action: "started" });
@@ -575,10 +575,19 @@ export async function runInstagramScheduler(req, {
     return finishRun(store, run, { ok: true, action: "idle", reason: "No queue in Netlify Blobs" });
   }
 
-  const selectQueue = rows => campaignQueue(rows, lane).filter(item => !targetId || item.id === targetId);
+  // The primary preparation run also prepares today's catch-up image. The
+  // recovery window can then publish it immediately without a new invocation.
+  const prepareCatchUp = createOnly && lane === "primary" && !targetId;
+  const catchUpLeadMs = 30 * 60 * 1000;
+  const selectQueue = rows => rows.filter(item =>
+    (!targetId || item.id === targetId) && (
+      campaignQueue([item], lane).length > 0 ||
+      (prepareCatchUp && item.scheduler_lane === "catch-up" && isDueWithinLead(item, now, catchUpLeadMs))
+    )
+  );
   let eligibleQueue = selectQueue(queue);
   const needsWork = eligibleQueue.some((item) =>
-    IN_PROGRESS_STATUSES.has(item.instagram_status) || isDueWithinLead(item, now, leadMs)
+    IN_PROGRESS_STATUSES.has(item.instagram_status) || isDueWithinLead(item, now, prepareCatchUp && item.scheduler_lane === "catch-up" ? catchUpLeadMs : leadMs)
   );
   if (!needsWork) {
     return finishRun(store, run, { ok: true, action: "idle", statuses: statusCounts(queue), checkedAt: now.toISOString() });
@@ -638,8 +647,12 @@ export async function runInstagramScheduler(req, {
       }, { email: recovery.failed.length > 0 });
     }
     eligibleQueue = selectQueue(queue);
-    for (let index = 0; index < (window === "recovery" ? 2 : 1); index += 1) {
-    item = nextItem(eligibleQueue.filter(candidate => !handled.has(candidate.id)), new Date(), leadMs);
+    for (let index = 0; index < (window === "recovery" || prepareCatchUp ? 2 : 1); index += 1) {
+    const available = eligibleQueue.filter(candidate => !handled.has(candidate.id));
+    item = prepareCatchUp
+      ? (index === 0 ? nextItem(campaignQueue(available, "primary"), new Date(), leadMs) : null)
+        || nextItem(available.filter(candidate => candidate.scheduler_lane === "catch-up"), new Date(), catchUpLeadMs)
+      : nextItem(available, new Date(), leadMs);
     if (!item) {
       break;
     }
