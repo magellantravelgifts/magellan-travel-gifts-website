@@ -507,9 +507,11 @@ export async function runInstagramScheduler(req, {
   leadMs = SCHEDULE_LEAD_MS,
   createOnly = false,
   lane = window === "recovery" ? "all" : "primary",
+  targetId = null,
   store: providedStore
 } = {}) {
-  const store = providedStore || getStore(STORE_NAME, { consistency: "strong" });
+  // Blobs v9 accepts one options object; a second argument is silently ignored.
+  const store = providedStore || getStore({ name: STORE_NAME, consistency: "strong" });
   const now = new Date();
   const scheduledPayload = await req?.json?.().catch(() => ({})) || {};
   const run = {
@@ -519,7 +521,7 @@ export async function runInstagramScheduler(req, {
     max_attempts: MAX_RUN_ATTEMPTS,
     window,
     lane,
-    scheduler_version: "additive-five-windows-v1"
+    scheduler_version: "strong-consistency-five-windows-v2"
   };
   try {
     await store.setJSON(RUN_STATUS_KEY, { ...run, action: "started" });
@@ -568,22 +570,13 @@ export async function runInstagramScheduler(req, {
     return finishRun(store, run, { ok: false, action: "configuration_error", missing }, 500);
   }
 
-  const queue = await readJSON(store, QUEUE_KEY, []);
+  let queue = await readJSON(store, QUEUE_KEY, []);
   if (!Array.isArray(queue) || queue.length === 0) {
     return finishRun(store, run, { ok: true, action: "idle", reason: "No queue in Netlify Blobs" });
   }
 
-  const recovery = recoverStaleItems(queue, now);
-  if (recovery.recovered.length || recovery.failed.length) {
-    await store.setJSON(QUEUE_KEY, queue);
-    await recordAlert(store, {
-      severity: recovery.failed.length ? "error" : "warning",
-      event: "stale_work_recovered",
-      message: `Recovered ${recovery.recovered.length} stale item(s); stopped ${recovery.failed.length} item(s).`
-    }, { email: recovery.failed.length > 0 });
-  }
-
-  const eligibleQueue = campaignQueue(queue, lane);
+  const selectQueue = rows => campaignQueue(rows, lane).filter(item => !targetId || item.id === targetId);
+  let eligibleQueue = selectQueue(queue);
   const needsWork = eligibleQueue.some((item) =>
     IN_PROGRESS_STATUSES.has(item.instagram_status) || isDueWithinLead(item, now, leadMs)
   );
@@ -633,6 +626,18 @@ export async function runInstagramScheduler(req, {
   // Leave ten seconds for persisting failure state, notifications and lock release.
   const deadlineAt = now.getTime() + 20000;
   try {
+    // Never recover or save a pre-lock snapshot over another invocation's work.
+    queue = await readJSON(store, QUEUE_KEY, []);
+    const recovery = recoverStaleItems(queue, new Date());
+    if (recovery.recovered.length || recovery.failed.length) {
+      await store.setJSON(QUEUE_KEY, queue);
+      await recordAlert(store, {
+        severity: recovery.failed.length ? "error" : "warning",
+        event: "stale_work_recovered",
+        message: `Recovered ${recovery.recovered.length} stale item(s); stopped ${recovery.failed.length} item(s).`
+      }, { email: recovery.failed.length > 0 });
+    }
+    eligibleQueue = selectQueue(queue);
     for (let index = 0; index < (window === "recovery" ? 2 : 1); index += 1) {
     item = nextItem(eligibleQueue.filter(candidate => !handled.has(candidate.id)), new Date(), leadMs);
     if (!item) {

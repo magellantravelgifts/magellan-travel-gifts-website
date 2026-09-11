@@ -1,5 +1,6 @@
 import { getStore } from "@netlify/blobs";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { runInstagramScheduler } from "./instagram-scheduler.mjs";
 
 const STORE_NAME = "magellan-instagram";
 const QUEUE_KEY = "monthly-queue";
@@ -46,7 +47,7 @@ export default async (req) => {
     return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
   }
 
-  const store = getStore(STORE_NAME, { consistency: "strong" });
+  const store = getStore({ name: STORE_NAME, consistency: "strong" });
 
   if (req.method === "GET") {
     const url = new URL(req.url);
@@ -57,11 +58,12 @@ export default async (req) => {
       return jsonResponse(await readJSON(store, ALERTS_KEY, { alerts: [] }));
     }
     if (url.searchParams.get("health") === "1") {
-      const [queue, alerts, circuit, lastRun] = await Promise.all([
+      const [queue, alerts, circuit, lastRun, lock] = await Promise.all([
         readJSON(store, QUEUE_KEY, []),
         readJSON(store, ALERTS_KEY, { alerts: [] }),
         readJSON(store, CIRCUIT_KEY, { status: "closed", consecutive_failures: 0 }),
-        readJSON(store, RUN_STATUS_KEY, null)
+        readJSON(store, RUN_STATUS_KEY, null),
+        readJSON(store, "scheduler-run-lock", null)
       ]);
       return jsonResponse({
         ok: circuit.status !== "open",
@@ -69,7 +71,10 @@ export default async (req) => {
         total: queue.length,
         counts: queueCounts(queue),
         latest_alert: alerts.alerts?.[0] || null,
-        last_run: lastRun
+        last_run: lastRun,
+        lock,
+        storage_consistency: "strong",
+        scheduler_version: "strong-consistency-five-windows-v2"
       });
     }
     const queue = await readJSON(store, QUEUE_KEY, []);
@@ -78,6 +83,19 @@ export default async (req) => {
 
   if (req.method === "POST" || req.method === "PUT") {
     const url = new URL(req.url);
+    // Authenticated, explicitly targeted repair runs use the same lock, retry,
+    // history and notification path as scheduled runs. Never drain the queue.
+    if (req.method === "POST" && url.searchParams.get("run") === "1") {
+      const { item_id: targetId, stage } = await req.json();
+      const queue = await readJSON(store, QUEUE_KEY, []);
+      if (typeof targetId !== "string" || !queue.some(item => item.id === targetId) || !["prepare", "publish"].includes(stage)) {
+        return jsonResponse({ ok: false, error: "An existing item_id and prepare/publish stage are required" }, 400);
+      }
+      return runInstagramScheduler(new Request(req.url), {
+        store, window: "manual", lane: "all", targetId, leadMs: 0,
+        createOnly: stage === "prepare"
+      });
+    }
     if (req.method === "POST" && url.searchParams.get("circuit") === "reset") {
       const circuit = {
         status: "closed",

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { setEnvironmentContext } from "@netlify/blobs";
 
 import {
   applyItemFailure,
@@ -43,6 +44,14 @@ test("campaign lanes preserve primary capacity even if Study Abroad is still pro
   assert.equal(campaignQueue(queue,"all").length,2);
 });
 
+test("catch-up posts use the existing recovery run, not either campaign's normal slot", () => {
+  const catchup = { id: "catchup", scheduler_lane: "catch-up", instagram_status: "scheduled", instagram_scheduled_publish_time: "2026-09-12T18:45:00-07:00" };
+  assert.equal(campaignQueue([catchup], "primary").length, 0);
+  assert.equal(campaignQueue([catchup], "study-abroad").length, 0);
+  assert.equal(nextItem(campaignQueue([catchup], "all"), new Date("2026-09-12T18:40:00-07:00")).id, "catchup");
+  assert.equal(nextItem([catchup], new Date("2026-09-11T18:40:00-07:00")), undefined);
+});
+
 test("both campaigns prepare and publish independently without altering other queue entries",async () => {
   const oldFetch=globalThis.fetch;
   const oldSiteUrl=process.env.NETLIFY_SITE_URL;
@@ -66,6 +75,11 @@ test("both campaigns prepare and publish independently without altering other qu
     assert.equal((await run({window:"recovery"})).action,"idle");
     assert.deepEqual(values.get("monthly-queue")[0],history);
     assert.equal(calls.filter(x=>x.endsWith("/media_publish")).length,2);
+    values.set("monthly-queue",[history,make("leave-untouched","primary"),make("target","study-abroad")]);
+    const manual = await run({ window:"manual", lane:"all", targetId:"target" });
+    assert.equal(manual.id,"target");
+    assert.equal(manual.action,"published");
+    assert.equal(values.get("monthly-queue")[1].instagram_status,"scheduled");
     values.set("monthly-queue",[history,...[make("summer-recovery","primary"),make("study-recovery","study-abroad")].map(r=>({...r,instagram_status:"container_created",instagram_container_id:r.id}))]);
     const recovered=await run({window:"recovery"});
     assert.equal(recovered.action,"recovery_batch");
@@ -202,4 +216,52 @@ test("status counts include manual review and failed items", () => {
     { instagram_status: "manual_review" },
     { instagram_status: "failed" }
   ]), { published: 1, manual_review: 1, failed: 1 });
+});
+
+test("real Blobs SDK uses uncached reads so a fresh lock can be acquired and released", async () => {
+  const oldFetch = globalThis.fetch;
+  const saved = Object.fromEntries(["NETLIFY_BLOBS_CONTEXT", "META_PAGE_ACCESS_TOKEN", "META_INSTAGRAM_BUSINESS_ID"].map(k => [k, process.env[k]]));
+  setEnvironmentContext({ siteID: "test-site", token: "test-only", edgeURL: "https://cached.example", uncachedEdgeURL: "https://strong.example" });
+  process.env.META_PAGE_ACCESS_TOKEN = "test-only";
+  process.env.META_INSTAGRAM_BUSINESS_ID = "test-only";
+  const values = new Map([["monthly-queue", [{ id: "test-post", instagram_status: "scheduled", instagram_ready: true, date: "2026-01-01", instagram_image_url: "https://example.com/photo.jpg", instagram_caption: "test" }]]]);
+  const reads = [];
+  globalThis.fetch = async (input, opts = {}) => {
+    const url = new URL(input);
+    if (url.hostname === "graph.facebook.com") return Response.json({ id: "test-container" });
+    const key = decodeURIComponent(url.pathname.split("/").at(-1));
+    if (opts.method === "put") { values.set(key, JSON.parse(opts.body)); return new Response(null, { status: 200 }); }
+    reads.push(url.hostname);
+    // Simulate the CDN not having observed the latest lock write.
+    const value = url.hostname === "cached.example" && key === "scheduler-run-lock" ? null : values.get(key);
+    return value == null ? new Response(null, { status: 404 }) : Response.json(value);
+  };
+  try {
+    const result = await (await runInstagramScheduler(new Request("https://example.com"), { createOnly: true })).json();
+    assert.equal(result.action, "container_created");
+    assert(reads.length > 0);
+    assert(reads.every(host => host === "strong.example"));
+    assert(values.get("scheduler-run-lock").released_at);
+    assert.equal(values.get("monthly-queue")[0].instagram_container_id, "test-container");
+  } finally {
+    globalThis.fetch = oldFetch;
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("a blocked invocation cannot mutate stale queue work owned by another run", async () => {
+  const saved = [process.env.META_PAGE_ACCESS_TOKEN, process.env.META_INSTAGRAM_BUSINESS_ID];
+  process.env.META_PAGE_ACCESS_TOKEN = "test-only"; process.env.META_INSTAGRAM_BUSINESS_ID = "test-only";
+  const queue = [{ id: "stale", instagram_status: "container_checking", instagram_work_started_at: "2026-01-01" }];
+  const values = new Map([["monthly-queue", queue], ["scheduler-run-lock", { id: "other-run", started_at: new Date().toISOString() }]]);
+  const writes = [];
+  const store = { get: async k => structuredClone(values.get(k)), setJSON: async (k, v) => { writes.push(k); values.set(k, structuredClone(v)); } };
+  try {
+    const result = await (await runInstagramScheduler(new Request("https://example.com"), { store })).json();
+    assert.equal(result.action, "skipped");
+    assert(!writes.includes("monthly-queue"));
+    assert.deepEqual(values.get("monthly-queue"), queue);
+  } finally {
+    for (const [i, k] of ["META_PAGE_ACCESS_TOKEN", "META_INSTAGRAM_BUSINESS_ID"].entries()) { if (saved[i] === undefined) delete process.env[k]; else process.env[k] = saved[i]; }
+  }
 });

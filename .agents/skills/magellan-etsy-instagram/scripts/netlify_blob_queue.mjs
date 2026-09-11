@@ -38,7 +38,7 @@ async function getBlobStore() {
   if (!siteID || !token) {
     throw new Error("Set NETLIFY_SITE_ID and NETLIFY_AUTH_TOKEN before using the Blob queue script.");
   }
-  return getStore(STORE_NAME, { siteID, token, consistency: "strong" });
+  return getStore({ name: STORE_NAME, siteID, token, consistency: "strong" });
 }
 
 function remoteEndpoint() {
